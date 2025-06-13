@@ -24,6 +24,7 @@ pub struct Validator {
 /// This struct contains the standard OIDC claims. Custom claims can be
 /// included by adding them to this struct and implementing `serde::Deserialize`.
 
+#[derive(Debug, Deserialize)]
 pub struct Claims {
     pub iss: String,
     pub sub: String,
