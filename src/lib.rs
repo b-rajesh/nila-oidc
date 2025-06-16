@@ -7,7 +7,7 @@ pub mod error;
 pub mod model;
 pub mod validator;
 
-/// The public prelude for the `pingora-oidc` crate.
+/// The public prelude for the `nila-oidc` crate.
 ///
 /// This module re-exports the most commonly used types for convenience.
 pub mod prelude {

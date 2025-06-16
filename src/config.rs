@@ -10,7 +10,7 @@ use url::Url;
 /// This struct is used to configure the specific checks that will be performed
 /// on the token's claims, such as allowed algorithms and clock skew tolerance.
 
-pub struct ValidationDetails {
+#[derive(Clone)] pub struct ValidationDetails {
     /// The signing algorithms that are permitted for the ID Token.
     /// Tokens signed with any other algorithm will be rejected.
     pub algorithms: Vec<Algorithm>,
@@ -38,7 +38,7 @@ impl Default for ValidationDetails {
 /// This struct holds all necessary information to connect to the OIDC provider
 /// and validate tokens. It should be constructed using the `ConfigBuilder`.
 
-pub struct Config {
+#[derive(Clone)] pub struct Config {
     /// The issuer URL of the OIDC provider. This is used for discovery and to
     /// validate the `iss` claim of the ID Token.
     pub issuer_url: Url,
@@ -67,6 +67,18 @@ pub struct ConfigBuilder {
     jwks_uri: Option<Url>,
     cache_ttl: Option<Duration>,
     validation: ValidationDetails,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self {
+            issuer_url: None,
+            client_id: None,
+            jwks_uri: None,
+            cache_ttl: None,
+            validation: ValidationDetails::default(),
+        }
+    }
 }
 
 impl ConfigBuilder {

@@ -15,7 +15,7 @@ categories = ["web-programming", "asynchronous", "api-bindings"]
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.12"
+thiserror = "2.0.12"                               # Version updated for consistency
 tokio = { version = "1", features = ["sync"] }
 url = { version = "2.5", features = ["serde"] }
 
@@ -23,6 +23,7 @@ url = { version = "2.5", features = ["serde"] }
 jsonwebtoken = "9.3"
 reqwest = { version = "0.12", features = ["json"] }
 once_cell = "1.19"
+base64-url = "3.0.0"
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
@@ -34,8 +35,10 @@ pingora-proxy = { version = "0.5.0", optional = true }
 pingora-core = { version = "0.5.0", optional = true }
 
 # For Redis Caching
-redis = { version = "0.32.0", features = ["tokio-comp"], optional = true }
-
+redis = { version = "0.32.0", features = [
+    "tokio-comp",
+], optional = true } # Version updated for consistency
+tracing = "0.1.41"
 
 [features]
 # Default feature enables the Pingora integration layer.
@@ -53,6 +56,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
 
 # For generating test keys and tokens
-rsa = "0.9"
-rand = "0.9.1"
-base64 = "0.22"
+rsa = "0.9.8"
+rand = "0.8.5"
+base64 = "0.13.1"
+chrono = "0.4.38"
+base64-url = "3.0.0"

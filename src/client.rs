@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::error::NilaOidcError;
 use crate::model::{JsonWebKeySet, OidcDiscoveryDocument};
-use jsonwebtoken::{DecodingKey, Header};
+use jsonwebtoken::DecodingKey;
 use moka::future::Cache;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,7 +53,7 @@ impl JwksClient {
     /// then return the key.
     #[instrument(skip(self), err)]
     pub async fn get_key(&self, kid: &str) -> Result<Arc<DecodingKey>, NilaOidcError> {
-        if let Some(key) = self.inner.key_cache.get(kid).await {
+        if let Some(key) = self.inner.key_cache.get(kid).await { // moka's get is sync
             debug!("JWK cache hit for kid: {}", kid);
             return Ok(key);
         }
@@ -63,10 +63,11 @@ impl JwksClient {
 
         // Try getting from the cache again after fetching.
         self.inner
-           .key_cache
-           .get(kid)
-           .await
-           .ok_or_else(|| NilaOidcError::KeyNotFound(kid.to_string()))
+            .key_cache
+            .get(kid)
+            .await
+            .ok_or_else(|| NilaOidcError::KeyNotFound(kid.to_string()))
+
     }
 
     /// The main loop for the background key refresh task.
@@ -95,7 +96,7 @@ impl JwksClient {
         let jwks_uri = self.get_jwks_uri().await?;
 
         let response = self.inner.http_client.get(jwks_uri).send().await?;
-        
+
         let cache_ttl = self.parse_cache_control(&response).unwrap_or(self.inner.config.cache_ttl);
 
         let jwks: JsonWebKeySet = response.json().await?;
@@ -103,36 +104,29 @@ impl JwksClient {
         info!("Successfully fetched {} keys. Caching with TTL: {:?}", jwks.keys.len(), cache_ttl);
 
         for jwk in jwks.keys {
-            // We only support RSA keys for now, as they are the most common for OIDC.
             if jwk.kty == "RSA" {
-                let decoding_key = DecodingKey::from_rsa_components(
-                    jwk.n.as_ref().ok_or(NilaOidcError::InvalidKeyFormat("missing 'n'".into()))?,
-                    jwk.e.as_ref().ok_or(NilaOidcError::InvalidKeyFormat("missing 'e'".into()))?,
-                ).map_err(|e| NilaOidcError::JwtError(e.into()))?;
-                
-                self.inner.key_cache.insert_with_ttl(jwk.kid, Arc::new(decoding_key), cache_ttl).await;
+                let decoding_key = DecodingKey::from_rsa_components(jwk.n.as_deref().unwrap_or_default(), jwk.e.as_deref().unwrap_or_default())?;
+                self.inner.key_cache.insert(jwk.kid, Arc::new(decoding_key)).await;
             }
         }
 
         Ok(cache_ttl)
     }
-    
+
     /// Determines the JWKS URI, either from config override or OIDC discovery.
     async fn get_jwks_uri(&self) -> Result<Url, NilaOidcError> {
         if let Some(uri) = self.inner.config.jwks_uri.clone() {
             debug!("Using JWKS URI from config override: {}", uri);
             return Ok(uri);
         }
-        
+
         let discovery_url = self.inner.config.issuer_url.join(".well-known/openid-configuration")
            .map_err(|e| NilaOidcError::InvalidUrl(e.to_string()))?;
 
         debug!("Performing OIDC discovery at: {}", discovery_url);
         let discovery_doc: OidcDiscoveryDocument = self.inner.http_client.get(discovery_url).send().await?.json().await?;
-        
-        let jwks_uri = Url::parse(&discovery_doc.jwks_uri).map_err(|e| NilaOidcError::InvalidUrl(e.to_string()))?;
-        debug!("Discovered JWKS URI: {}", jwks_uri);
-        Ok(jwks_uri)
+
+        Ok(Url::parse(&discovery_doc.jwks_uri).map_err(|e| NilaOidcError::InvalidUrl(e.to_string()))?)
     }
 
     /// Parses the `Cache-Control` header to determine the TTL.

@@ -1,14 +1,19 @@
 // src/validator.rs
 
 use crate::client::JwksClient;
-use crate::config::Config;
+use crate::config::{Config};
 use crate::error::NilaOidcError;
-use jsonwebtoken::{decode, decode_header, Validation, TokenData};
-use serde::Deserialize;
-use std::collections::HashSet;
+use jsonwebtoken::{decode, decode_header, TokenData, Validation};
+use serde::de::DeserializeOwned; // Import DeserializeOwned
 use tracing::instrument;
+use serde::Deserialize;
 
 /// The main OIDC ID Token validator.
+/// Trait for claims types that include a nonce.
+pub trait HasNonce {
+    /// Returns the nonce claim, if present.
+    fn get_nonce(&self) -> Option<&str>;
+}
 ///
 /// This struct is initialized with a `Config` and should be created once
 /// and reused for all validation requests. It manages the JWKS client
@@ -22,8 +27,7 @@ pub struct Validator {
 /// The claims decoded from a valid ID Token.
 ///
 /// This struct contains the standard OIDC claims. Custom claims can be
-/// included by adding them to this struct and implementing `serde::Deserialize`.
-
+/// included by creating a new struct that implements `serde::Deserialize` and `HasNonce`.
 #[derive(Debug, Deserialize)]
 pub struct Claims {
     pub iss: String,
@@ -33,6 +37,13 @@ pub struct Claims {
     pub iat: u64,
     pub nonce: Option<String>,
     // Add other custom claims here if needed.
+}
+
+// Implement HasNonce for the standard Claims struct.
+impl HasNonce for Claims {
+    fn get_nonce(&self) -> Option<&str> {
+        self.nonce.as_deref()
+    }
 }
 
 impl Validator {
@@ -57,37 +68,47 @@ impl Validator {
     ///
     /// # Returns
     ///
-    /// A `TokenData<Claims>` object containing the decoded claims if validation is successful.
+    /// A `TokenData` object containing the decoded claims if validation is successful.
     #[instrument(skip(self, token), err)]
-    pub async fn validate(&self, token: &str, nonce: Option<&str>) -> Result<TokenData<Claims>, NilaOidcError> {
+    pub async fn validate<T: DeserializeOwned + HasNonce>(
+        &self,
+        token: &str,
+        nonce_to_verify: Option<&str>,
+    ) -> Result<TokenData<T>, NilaOidcError> {
         // 1. Decode header to get kid and alg without validation.
-        let header = decode_header(token).map_err(|e| NilaOidcError::JwtError(e.into()))?;
-        
+        let header = decode_header(token).map_err(NilaOidcError::JwtValidation)?;
+
         // 2. Check if the algorithm is allowed.
-        if!self.config.validation.algorithms.contains(&header.alg) {
+        if !self.config.validation.algorithms.contains(&header.alg) {
             return Err(NilaOidcError::UnsupportedAlgorithm(header.alg));
         }
 
-        // 3. Get the key from the JWKS client.
+        // 3. Get the decoding key from the JWKS client.
         let kid = header.kid.ok_or(NilaOidcError::MissingKeyId)?;
         let decoding_key = self.jwks_client.get_key(&kid).await?;
 
         // 4. Construct validation options.
         let mut validation = Validation::new(header.alg);
         validation.leeway = self.config.validation.leeway.as_secs();
+        // issuer_url is not optional in Config, so we can use it directly.
         validation.set_issuer(&[self.config.issuer_url.as_str()]);
-        validation.set_audience(&[&self.config.client_id]);
+        validation.set_audience(&[&self.config.client_id]); // client_id is typically required as audience
         validation.set_required_spec_claims(&["exp", "iat", "iss", "aud", "sub"]);
 
         // 5. Decode and validate the token.
-        let token_data = decode::<Claims>(token, &decoding_key, &validation)
-           .map_err(|e| NilaOidcError::JwtError(e.into()))?;
+        let token_data = decode::<T>(token, &decoding_key, &validation)
+            .map_err(NilaOidcError::JwtValidation)?;
 
         // 6. Validate the nonce if required.
         if self.config.validation.validate_nonce {
-            let expected_nonce = nonce.ok_or(NilaOidcError::MissingNonce)?;
-            let token_nonce = token_data.claims.nonce.as_deref().ok_or(NilaOidcError::MissingNonce)?;
-            if expected_nonce!= token_nonce {
+            let expected_nonce_value = nonce_to_verify
+                .ok_or(NilaOidcError::MissingNonceForValidation)?;
+
+            // Use the HasNonce trait to get the nonce from the claims.
+            let token_nonce_value = token_data.claims.get_nonce()
+                .ok_or(NilaOidcError::MissingNonceInToken)?;
+
+            if expected_nonce_value != token_nonce_value {
                 return Err(NilaOidcError::NonceMismatch);
             }
         }
