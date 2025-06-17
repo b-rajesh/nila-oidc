@@ -141,6 +141,12 @@ impl ConfigBuilder {
         self.shared_secret_option = Some(secret);
         Ok(self)
     }
+
+    /// Sets whether nonce validation should be performed.
+    pub fn validate_nonce(mut self, validate: bool) -> Self {
+        self.validation.validate_nonce = validate;
+        self
+    }
     /// Consumes the builder and returns a `Config` object.
     ///
     /// # Errors

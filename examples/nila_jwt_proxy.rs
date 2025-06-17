@@ -17,6 +17,7 @@ struct ProxyAppConfig {
     jwks_uri: Option<String>, // Optional direct JWKS URI
     algorithms: Option<Vec<String>>,
     leeway_seconds: Option<u64>,
+    validate_nonce: Option<bool>, // Add this field
     listen_addr: String,
     upstream_addr: String,
 }
@@ -115,6 +116,7 @@ fn main() -> Result<()> { // Changed to synchronous main
                 err.set_context(format!("Failed to parse YAML config from {}: {:?}", config_path, e)); // Ensure {:?} is used for e
                 err // Return Error directly, ? will box it
             })?;
+        dbg!(&app_config); // Add this line to inspect the deserialized config
 
         // --- Configure Nila OIDC Validator ---
         let mut oidc_builder = ConfigBuilder::new()
@@ -152,6 +154,11 @@ fn main() -> Result<()> { // Changed to synchronous main
             oidc_builder = oidc_builder.leeway(Duration::from_secs(leeway_s));
         }
 
+        // Configure nonce validation based on YAML, defaulting to true if not specified in YAML.
+        // This assumes ValidationDetails::default() sets validate_nonce to true.
+        let should_validate_nonce = app_config.validate_nonce.unwrap_or(true);
+        oidc_builder = oidc_builder.validate_nonce(should_validate_nonce);
+
         let oidc_config = oidc_builder.build()
             .map_err(|e| {
                 let mut err = Error::new(ErrorType::InternalError);
@@ -185,11 +192,4 @@ fn main() -> Result<()> { // Changed to synchronous main
 
     my_server.add_service(proxy_service);
     my_server.run_forever();
-}
-
-// Helper to allow disabling nonce validation via builder (Optional enhancement for config.rs)
-// If you add this to config.rs:
-// pub fn validate_nonce(mut self, validate: bool) -> Self {
-//     self.validation.validate_nonce = validate;
-//     self
-// }
+ }
