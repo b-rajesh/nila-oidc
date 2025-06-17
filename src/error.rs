@@ -45,5 +45,13 @@ pub enum NilaOidcError {
 
     #[error("Base64 decoding error")]
     Base64DecodeError(#[from] base64_url::base64::DecodeError),
-    
+
+    #[error("Ambiguous key source configuration: {0}")]
+    AmbiguousKeySource(String),
+
+    #[error("Missing key material for the specified algorithm (e.g., no shared secret for symmetric algorithm)")]
+    MissingKeyMaterial,
+
+    #[error("The configured key type is not supported for the token's algorithm (e.g., shared secret for RSA)")]
+    UnsupportedKeyTypeForAlgorithm,
 }

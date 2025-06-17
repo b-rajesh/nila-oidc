@@ -1,0 +1,13 @@
+# Example configuration for the Pingora JWT Proxy
+
+issuer_url: "https://accounts.google.com" # Required: OIDC provider's issuer URL
+# Optional: Uncomment and set if you want to specify the JWKS URI directly,
+# bypassing discovery from the issuer_url.
+jwks_uri: "https://www.googleapis.com/oauth2/v3/certs"
+client_id: "your-client-id.apps.googleusercontent.com" # Required: Your application's client ID
+
+algorithms: # Optional: Defaults to ["RS256"] in nila-oidc
+  - "RS256"
+
+listen_addr: "0.0.0.0:6188"
+upstream_addr: "1.1.1.1:80" # Example upstream

@@ -2,24 +2,27 @@
 
 #[cfg(test)]
 mod tests {
+    use rsa::pkcs1::EncodeRsaPrivateKey; // Import EncodeRsaPrivateKey here
+    use rsa::RsaPublicKey; // Import RsaPublicKey here
+    use rsa::traits::PublicKeyParts; // Import PublicKeyParts trait
     use nila_oidc::prelude::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     use serde_json::json;
     use jsonwebtoken::{encode, EncodingKey, Header};
-    use std::time::Duration;
 
     // Helper to create a dummy RSA key for signing tokens in tests.
     fn create_test_keys() -> (EncodingKey, serde_json::Value) {
-        let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-        let components = key.to_components();
-        let encoding_key = EncodingKey::from_rsa_der(&key.to_pkcs1_der().unwrap()).unwrap();
+        let mut rng = rand::thread_rng(); // Create rng here
+        let key = rsa::RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&key); // Get public key from private key
+        let encoding_key = EncodingKey::from_rsa_der(key.to_pkcs1_der().unwrap().as_bytes());
         let jwk = json!({
             "kty": "RSA",
             "kid": "test-kid-1",
             "alg": "RS256",
-            "n": base64_url::encode(&components.n.to_bytes_be()),
-            "e": base64_url::encode(&components.e.to_bytes_be()),
+            "n": base64_url::encode(&public_key.n().to_bytes_be()), // Access n from public_key
+            "e": base64_url::encode(&public_key.e().to_bytes_be()), // Access e from public_key
         });
         (encoding_key, jwk)
     }
@@ -73,11 +76,11 @@ mod tests {
         let token = encode(&header, &claims, &encoding_key).unwrap();
 
         // Validate the token.
-        let result = validator.validate(&token, None).await;
+        let result = validator.validate::<Claims>(&token, None).await;
 
         // 3. Assert
         assert!(result.is_ok());
-        let token_data = result.unwrap();
+        let token_data: jsonwebtoken::TokenData<Claims> = result.unwrap();
         assert_eq!(token_data.claims.sub, "user123");
         
         // The mock server will automatically verify the `.expect(1)` on drop.

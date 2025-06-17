@@ -1,13 +1,13 @@
 // src/validator.rs
 
 use crate::client::JwksClient;
-use crate::config::{Config};
+use crate::config::{Config, KeySourceConfig};
 use crate::error::NilaOidcError;
 use jsonwebtoken::{decode, decode_header, TokenData, Validation};
 use serde::de::DeserializeOwned; // Import DeserializeOwned
 use tracing::instrument;
 use serde::Deserialize;
-
+use jsonwebtoken::DecodingKey;
 /// The main OIDC ID Token validator.
 /// Trait for claims types that include a nonce.
 pub trait HasNonce {
@@ -21,7 +21,8 @@ pub trait HasNonce {
 #[derive(Clone)]
 pub struct Validator {
     config: Config,
-    jwks_client: JwksClient,
+    // JwksClient is only present if config.key_source is Jwks
+    jwks_client: Option<JwksClient>,
 }
 
 /// The claims decoded from a valid ID Token.
@@ -49,8 +50,17 @@ impl HasNonce for Claims {
 impl Validator {
     /// Creates a new `Validator` with the given configuration.
     pub fn new(config: Config) -> Self {
-        let jwks_client = JwksClient::new(config.clone());
-        Self { config, jwks_client }
+        let jwks_client = match &config.key_source {
+            KeySourceConfig::Jwks { jwks_uri, cache_ttl } => {
+                Some(JwksClient::new(
+                    config.issuer_url.clone(), // Needed for discovery if jwks_uri is None
+                    jwks_uri.clone(),
+                    *cache_ttl
+                ))
+            }
+            KeySourceConfig::SharedSecret(_) => None,
+        };
+        Self { config, jwks_client}
     }
 
     /// Validates an OIDC ID Token.
@@ -83,9 +93,27 @@ impl Validator {
             return Err(NilaOidcError::UnsupportedAlgorithm(header.alg));
         }
 
-        // 3. Get the decoding key from the JWKS client.
-        let kid = header.kid.ok_or(NilaOidcError::MissingKeyId)?;
-        let decoding_key = self.jwks_client.get_key(&kid).await?;
+        // 3. Get the decoding key based on algorithm type and configuration.
+        let decoding_key = match header.alg {
+            jsonwebtoken::Algorithm::HS256 | jsonwebtoken::Algorithm::HS384 | jsonwebtoken::Algorithm::HS512 => {
+                // Symmetric algorithm, requires a shared secret
+                match &self.config.key_source {
+                    KeySourceConfig::SharedSecret(secret) => DecodingKey::from_secret(secret.as_slice()),
+                    KeySourceConfig::Jwks { .. } => return Err(NilaOidcError::UnsupportedKeyTypeForAlgorithm), // JWKS configured for symmetric alg
+                }
+            }
+            _ => { // Asymmetric algorithm, requires JWKS
+                match &self.config.key_source {
+                    KeySourceConfig::Jwks { .. } => {
+                        let jwks_client = self.jwks_client.as_ref().ok_or(NilaOidcError::MissingKeyMaterial)?; // Should not happen if config is Jwks
+                        let kid = header.kid.ok_or(NilaOidcError::MissingKeyId)?;
+                        (*jwks_client.get_key(&kid).await?).clone() // Clone the DecodingKey from the Arc
+                    }
+                    KeySourceConfig::SharedSecret(_) => return Err(NilaOidcError::UnsupportedKeyTypeForAlgorithm), // Shared secret configured for asymmetric alg
+                }
+            }
+        };
+
 
         // 4. Construct validation options.
         let mut validation = Validation::new(header.alg);

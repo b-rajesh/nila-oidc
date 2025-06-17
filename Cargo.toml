@@ -15,7 +15,7 @@ categories = ["web-programming", "asynchronous", "api-bindings"]
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.12"                               # Version updated for consistency
+thiserror = "2.0.12"                               # Corrected to a valid version series
 tokio = { version = "1", features = ["sync"] }
 url = { version = "2.5", features = ["serde"] }
 
@@ -52,12 +52,15 @@ redis-cache = ["dep:redis"]
 
 [dev-dependencies]
 # Testing Frameworks
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 wiremock = "0.6"
+
 
 # For generating test keys and tokens
 rsa = "0.9.8"
 rand = "0.8.5"
-base64 = "0.13.1"
+base64 = "0.22.1"
 chrono = "0.4.38"
 base64-url = "3.0.0"
+async-trait = "0.1"  # For ProxyHttp trait
+serde_yaml = "0.9"   # For YAML config in example

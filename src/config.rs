@@ -33,6 +33,20 @@ impl Default for ValidationDetails {
     }
 }
 
+/// Defines the source for JWT validation keys.
+#[derive(Clone)]
+pub enum KeySourceConfig {
+    /// Keys are fetched from a JWKS endpoint.
+    Jwks {
+        /// Optional override for the JWKS endpoint URL. If `None`, the URL will be
+        /// discovered from the issuer's `.well-known/openid-configuration` endpoint.
+        jwks_uri: Option<Url>,
+        /// The duration for which the fetched JWKS will be cached if no `Cache-Control` header is present.
+        cache_ttl: Duration,
+    },
+    /// A shared secret is used for symmetric key algorithms (e.g., HS256).
+    SharedSecret(Vec<u8>),
+}
 /// The main configuration for the `nila-oidc` validator.
 ///
 /// This struct holds all necessary information to connect to the OIDC provider
@@ -45,15 +59,10 @@ impl Default for ValidationDetails {
     /// The client ID of the application, as registered with the OIDC provider.
     /// This is used to validate the `aud` claim of the ID Token.
     pub client_id: String,
-    /// Optional override for the JWKS endpoint URL. If `None`, the URL will be
-    /// discovered from the issuer's `.well-known/openid-configuration` endpoint.
-    pub jwks_uri: Option<Url>,
-    /// The duration for which the fetched JWKS will be cached. This is a fallback
-    /// used only if the OIDC provider does not return a `Cache-Control` header.
-    /// Defaults to 24 hours.
-    pub cache_ttl: Duration,
     /// The specific validation parameters to apply to the token.
     pub validation: ValidationDetails,
+    /// The source for obtaining JWT validation keys.
+    pub key_source: KeySourceConfig,
 }
 
 /// A builder for creating a `Config` instance.
@@ -61,24 +70,13 @@ impl Default for ValidationDetails {
 /// This builder provides a fluent API to ensure that the configuration is
 /// constructed correctly and with all required fields.
 
-pub struct ConfigBuilder {
+#[derive(Default)] pub struct ConfigBuilder {
     issuer_url: Option<Url>,
     client_id: Option<String>,
-    jwks_uri: Option<Url>,
-    cache_ttl: Option<Duration>,
+    jwks_uri_option: Option<Url>, // Renamed to avoid conflict with method
+    cache_ttl_option: Option<Duration>, // Renamed for clarity
+    shared_secret_option: Option<Vec<u8>>,
     validation: ValidationDetails,
-}
-
-impl Default for ConfigBuilder {
-    fn default() -> Self {
-        Self {
-            issuer_url: None,
-            client_id: None,
-            jwks_uri: None,
-            cache_ttl: None,
-            validation: ValidationDetails::default(),
-        }
-    }
 }
 
 impl ConfigBuilder {
@@ -106,19 +104,22 @@ impl ConfigBuilder {
 
     /// Sets an explicit JWKS URI, bypassing OIDC discovery. This is optional.
     pub fn jwks_uri(mut self, url: &str) -> Result<Self, NilaOidcError> {
+        if self.shared_secret_option.is_some() {
+            return Err(NilaOidcError::AmbiguousKeySource("Cannot set JWKS URI when a shared secret is already configured.".to_string()));
+        }
         let parsed_url = Url::parse(url).map_err(|e| NilaOidcError::InvalidUrl(e.to_string()))?;
-        self.jwks_uri = Some(parsed_url);
+        self.jwks_uri_option = Some(parsed_url);
         Ok(self)
     }
 
     /// Sets the fallback cache TTL for the JWKS. This is optional.
     pub fn cache_ttl(mut self, ttl: Duration) -> Self {
-        self.cache_ttl = Some(ttl);
+        self.cache_ttl_option = Some(ttl);
         self
     }
-    
-    /// Sets the allowed signing algorithms. This is optional.
-    /// Defaults to ``.
+
+    /// Sets the allowed signing algorithms.
+    /// Defaults to `[Algorithm::RS256]` if not set.
     pub fn algorithms(mut self, algorithms: Vec<Algorithm>) -> Self {
         self.validation.algorithms = algorithms;
         self
@@ -131,6 +132,15 @@ impl ConfigBuilder {
         self
     }
 
+    /// Sets the shared secret for symmetric key algorithms (e.g., HS256).
+    /// This is mutually exclusive with providing a JWKS URI.
+    pub fn shared_secret(mut self, secret: Vec<u8>) -> Result<Self, NilaOidcError> {
+        if self.jwks_uri_option.is_some() {
+            return Err(NilaOidcError::AmbiguousKeySource("Cannot set shared secret when a JWKS URI is already configured.".to_string()));
+        }
+        self.shared_secret_option = Some(secret);
+        Ok(self)
+    }
     /// Consumes the builder and returns a `Config` object.
     ///
     /// # Errors
@@ -140,12 +150,25 @@ impl ConfigBuilder {
         let issuer_url = self.issuer_url.ok_or(NilaOidcError::MissingConfiguration("issuer_url".to_string()))?;
         let client_id = self.client_id.ok_or(NilaOidcError::MissingConfiguration("client_id".to_string()))?;
 
+        let key_source = if let Some(secret) = self.shared_secret_option {
+            if self.jwks_uri_option.is_some() {
+                 // This check is also in the setters, but good for belt-and-suspenders
+                return Err(NilaOidcError::AmbiguousKeySource("Both shared secret and JWKS URI configured.".to_string()));
+            }
+            KeySourceConfig::SharedSecret(secret)
+        } else {
+            // If no shared secret, JWKS is the source (either direct URI or via discovery)
+            KeySourceConfig::Jwks {
+                jwks_uri: self.jwks_uri_option,
+                cache_ttl: self.cache_ttl_option.unwrap_or_else(|| Duration::from_secs(24 * 60 * 60)),
+            }
+        };
+
         Ok(Config {
             issuer_url,
             client_id,
-            jwks_uri: self.jwks_uri,
-            cache_ttl: self.cache_ttl.unwrap_or_else(|| Duration::from_secs(24 * 60 * 60)),
             validation: self.validation,
+            key_source,
         })
     }
 }
