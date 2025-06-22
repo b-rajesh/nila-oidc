@@ -39,7 +39,7 @@ redis = { version = "0.32.0", features = [
     "tokio-comp",
 ], optional = true } # Version updated for consistency
 tracing = "0.1.41"
-
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 [features]
 # Default feature enables the Pingora integration layer.
 default = ["pingora-integration"]

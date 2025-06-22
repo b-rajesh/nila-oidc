@@ -8,7 +8,16 @@ use std::sync::Arc;
 use std::fs;
 use std::time::Duration;
 use std::str::FromStr; // Import FromStr
+use std::collections::HashMap;
 use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct LoggingConfig {
+    //output: Option<String>, // Made optional as we only use level for now
+    level: Option<String>,
+    //format: Option<String>, // Made optional
+    //pretty_print_logs: Option<bool>, // Made optional
+}
 
 #[derive(Debug, Deserialize)]
 struct ProxyAppConfig {
@@ -17,7 +26,10 @@ struct ProxyAppConfig {
     jwks_uri: Option<String>, // Optional direct JWKS URI
     algorithms: Option<Vec<String>>,
     leeway_seconds: Option<u64>,
-    validate_nonce: Option<bool>, // Add this field
+    validate_nonce: Option<bool>,
+    cache_ttl_seconds: Option<u64>, // For default JWKS cache TTL
+    claim_assertions: Option<ClaimAssertionsConfig>, // Add this for new assertions
+    logging: Option<LoggingConfig>, // Updated to nested logging config
     listen_addr: String,
     upstream_addr: String,
 }
@@ -27,6 +39,12 @@ struct UpstreamConfig {
     addr: String,
     tls: bool, // Assuming HttpPeer::new takes (addr, tls, sni)
     sni: String,
+}
+
+#[derive(Debug, Deserialize, Clone)] // Clone might be needed if passed around
+struct ClaimAssertionsConfig {
+    required_claims: Option<Vec<String>>,
+    exact_match_claims: Option<HashMap<String, serde_json::Value>>,
 }
 struct JwtAuthService {
     validator: Arc<Validator>,
@@ -83,8 +101,35 @@ impl ProxyHttp for JwtAuthService {
 }
 
 fn main() -> Result<()> { // Changed to synchronous main
-    // Initialize logger (optional)
-    // env_logger::init();
+    // --- Load Configuration from YAML (early, for log_level) ---
+    let config_path = "examples/proxy_config.yaml";
+    let config_str = fs::read_to_string(config_path)
+        .map_err(|e| {
+            let mut err = Error::new(ErrorType::ReadError);
+            err.set_context(format!("Failed to read config file {}: {:?}", config_path, e));
+            err
+        })?;
+    let app_config: ProxyAppConfig = serde_yaml::from_str(&config_str)
+        .map_err(|e| {
+            let mut err = Error::new(ErrorType::InternalError);
+            err.set_context(format!("Failed to parse YAML config from {}: {:?}", config_path, e));
+            err
+        })?;
+
+    // Initialize tracing subscriber based on config
+    let log_level_str = app_config.logging.as_ref()
+        .and_then(|l| l.level.as_deref())
+        .unwrap_or("info"); // Default to "info"
+
+    let log_level = tracing::Level::from_str(log_level_str).unwrap_or(tracing::Level::INFO);
+    let subscriber_builder = tracing_subscriber::fmt().with_max_level(log_level);
+
+    // Note: The 'format' and 'pretty_print_logs' from YAML are not used by this basic fmt subscriber setup.
+    // For JSON output or more complex formatting, you'd use other layers/formatters from tracing_subscriber.
+    subscriber_builder.init();
+
+    tracing::info!("Log level set to: {}", log_level);
+    dbg!(&app_config); // Keep this for inspecting the full deserialized config
 
     // 1. Create a Tokio runtime manually
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -97,27 +142,10 @@ fn main() -> Result<()> { // Changed to synchronous main
             err 
         })?;
 
-    // 2. Execute async setup logic within the runtime's context
-    let (jwt_auth_service, app_listen_addr) = runtime.block_on(async {
-        // --- Load Configuration from YAML ---
-        // Map std::io::Error to pingora_core::Error
-        let config_path = "examples/proxy_config.yaml";
-        let config_str = fs::read_to_string(config_path)
-            .map_err(|e| {
-                let mut err = Error::new(ErrorType::ReadError);
-                err.set_context(format!("Failed to read config file {}: {:?}", config_path, e)); // Ensure {:?} is used for e
-                err // Return Error directly, ? will box it
-            })?;
-
-        // Map serde_yaml::Error to pingora_core::Error
-        let app_config: ProxyAppConfig = serde_yaml::from_str(&config_str)
-            .map_err(|e| {
-                let mut err = Error::new(ErrorType::InternalError);
-                err.set_context(format!("Failed to parse YAML config from {}: {:?}", config_path, e)); // Ensure {:?} is used for e
-                err // Return Error directly, ? will box it
-            })?;
-        dbg!(&app_config); // Add this line to inspect the deserialized config
-
+    // 2. Execute async setup logic within the runtime's context, using the already parsed app_config
+    // Note: We clone app_config here if it's needed later outside the block_on,
+    // or pass references if appropriate. For this example, using it directly is fine.
+    let (jwt_auth_service, app_listen_addr_from_config) = runtime.block_on(async {
         // --- Configure Nila OIDC Validator ---
         let mut oidc_builder = ConfigBuilder::new()
             .issuer_url(&app_config.issuer_url)
@@ -141,7 +169,7 @@ fn main() -> Result<()> { // Changed to synchronous main
         if let Some(algs_str) = &app_config.algorithms {
             let algorithms_res: std::result::Result<Vec<Algorithm>, Box<Error>> = algs_str
                 .iter()
-                .map(|s_val| Algorithm::from_str(s_val).map_err(|_| { 
+                .map(|s_val| Algorithm::from_str(s_val).map_err(|_| {
                     let mut err = Error::new(ErrorType::InternalError);
                     err.set_context(format!("Invalid algorithm string: {}", s_val));
                     err
@@ -159,6 +187,18 @@ fn main() -> Result<()> { // Changed to synchronous main
         let should_validate_nonce = app_config.validate_nonce.unwrap_or(true);
         oidc_builder = oidc_builder.validate_nonce(should_validate_nonce);
 
+        if let Some(ttl_seconds) = app_config.cache_ttl_seconds {
+            oidc_builder = oidc_builder.cache_ttl(Duration::from_secs(ttl_seconds));
+        }
+
+        if let Some(assertions) = &app_config.claim_assertions {
+            if let Some(required) = &assertions.required_claims {
+                oidc_builder = oidc_builder.required_claims(required.clone());
+            }
+            if let Some(exact_match) = &assertions.exact_match_claims {
+                oidc_builder = oidc_builder.exact_match_claims(exact_match.clone());
+            }
+        }
         let oidc_config = oidc_builder.build()
             .map_err(|e| {
                 let mut err = Error::new(ErrorType::InternalError);
@@ -175,7 +215,7 @@ fn main() -> Result<()> { // Changed to synchronous main
             sni: upstream_sni,
         };
 
-        Ok::<_, Box<Error>>((JwtAuthService { validator, upstream: upstream_config }, app_config.listen_addr))
+        Ok::<_, Box<Error>>((JwtAuthService { validator, upstream: upstream_config }, app_config.listen_addr.clone()))
     })?; // The error from block_on's future is now Box<Error>
 
     // --- Configure Pingora Server ---
@@ -185,9 +225,9 @@ fn main() -> Result<()> { // Changed to synchronous main
     my_server.bootstrap();
 
     let mut proxy_service = pingora_proxy::http_proxy_service(&my_server.configuration, jwt_auth_service);
-    proxy_service.add_tcp(&app_listen_addr);
+    proxy_service.add_tcp(&app_listen_addr_from_config);
 
-    println!("Pingora JWT proxy listening on {}", app_listen_addr);
+    tracing::info!("Pingora JWT proxy listening on {}", app_listen_addr_from_config);
     println!("Test with: curl -v -H \"Authorization: Bearer <YOUR_JWT_TOKEN>\" http://localhost:6188/");
 
     my_server.add_service(proxy_service);

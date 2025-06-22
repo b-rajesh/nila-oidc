@@ -91,7 +91,7 @@ impl JwksClient {
             // Proactively refresh before the cache actually expires.
             // Refresh at 80% of the TTL's lifetime.
             let refresh_interval = Duration::from_secs_f64(ttl.as_secs_f64() * 0.8);
-            info!("JWKS background refresh scheduled in {:?}", refresh_interval);
+            debug!("JWKS background refresh scheduled in {:?}", refresh_interval);
             tokio::time::sleep(refresh_interval).await;
         }
     }
@@ -108,7 +108,7 @@ impl JwksClient {
 
         let jwks: JsonWebKeySet = response.json().await?;
 
-        info!("Successfully fetched {} keys. Caching with TTL: {:?}", jwks.keys.len(), cache_ttl);
+        debug!("Successfully fetched {} keys. Caching with TTL: {:?}", jwks.keys.len(), cache_ttl);
 
         for jwk in jwks.keys {
             if jwk.kty == "RSA" {

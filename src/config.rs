@@ -2,6 +2,7 @@
 
 use crate::error::NilaOidcError;
 use jsonwebtoken::Algorithm;
+use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
 
@@ -20,6 +21,10 @@ use url::Url;
     /// Whether to validate the `nonce` claim. If set to `true`, the `validate` method
     /// will require a `nonce` to be passed and will check it against the token's claim.
     pub validate_nonce: bool,
+    /// A list of claim names that must be present in the token.
+    pub required_claims: Option<Vec<String>>,
+    /// A map of claim names to their expected exact values.
+    pub exact_match_claims: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl Default for ValidationDetails {
@@ -29,6 +34,8 @@ impl Default for ValidationDetails {
             algorithms: vec![Algorithm::RS256],
             leeway: Duration::from_secs(60),
             validate_nonce: true,
+            required_claims: None,
+            exact_match_claims: None,
         }
     }
 }
@@ -147,6 +154,20 @@ impl ConfigBuilder {
         self.validation.validate_nonce = validate;
         self
     }
+
+    /// Sets a list of claim names that must be present in the token.
+    pub fn required_claims(mut self, claims: Vec<String>) -> Self {
+        self.validation.required_claims = Some(claims);
+        self
+    }
+
+    /// Sets a map of claim names to their expected exact values.
+    /// The values should be `serde_json::Value` to support various JSON types (string, number, boolean).
+    pub fn exact_match_claims(mut self, claims: HashMap<String, serde_json::Value>) -> Self {
+        self.validation.exact_match_claims = Some(claims);
+        self
+    }
+
     /// Consumes the builder and returns a `Config` object.
     ///
     /// # Errors

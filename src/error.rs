@@ -54,4 +54,10 @@ pub enum NilaOidcError {
 
     #[error("The configured key type is not supported for the token's algorithm (e.g., shared secret for RSA)")]
     UnsupportedKeyTypeForAlgorithm,
+
+    #[error("A required claim is missing from the token: {0}")]
+    MissingRequiredClaim(String),
+
+    #[error("Claim '{claim}' value mismatch. Expected: {expected}, Actual: {actual}")]
+    ClaimValueMismatch { claim: String, expected: serde_json::Value, actual: serde_json::Value },
 }
