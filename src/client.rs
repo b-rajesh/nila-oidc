@@ -6,7 +6,7 @@ use jsonwebtoken::DecodingKey;
 use moka::future::Cache;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// A client for fetching and caching JSON Web Keys (JWKs) from an OIDC provider.
@@ -79,12 +79,23 @@ impl JwksClient {
 
     /// The main loop for the background key refresh task.
     async fn key_refresh_loop(&self) {
+        let base_retry_delay = Duration::from_secs(5);
+        let max_retry_delay = Duration::from_secs(300); // 5 minutes
+        let mut current_retry_delay = base_retry_delay;
+
         loop {
             let ttl = match self.fetch_and_cache_keys().await {
-                Ok(duration) => duration,
+                Ok(duration) => {
+                    // On success, reset the retry delay for the next potential failure.
+                    current_retry_delay = base_retry_delay;
+                    duration
+                }
                 Err(e) => {
-                    error!("Failed to refresh JWKS in background: {:?}. Retrying in 60s.", e);
-                    Duration::from_secs(60)
+                    error!("Failed to refresh JWKS in background: {:?}. Retrying in {:?}.", e, current_retry_delay);
+                    tokio::time::sleep(current_retry_delay).await;
+                    // Double the delay for the next attempt, up to the max.
+                    current_retry_delay = (current_retry_delay * 2).min(max_retry_delay);
+                    continue; // Skip the proactive refresh sleep and retry immediately after the delay.
                 }
             };
 

@@ -1,34 +1,41 @@
 # Example configuration for the Pingora JWT Proxy
 
-issuer_url: "https://dev-mggbo2rpkt6xfkix.us.auth0.com/" # Required: OIDC provider's issuer URL
-# Optional: Uncomment and set if you want to specify the JWKS URI directly,
-# bypassing discovery from the issuer_url.
-jwks_uri: "https://dev-mggbo2rpkt6xfkix.us.auth0.com/.well-known/jwks.json"
-client_id: "https://dev-mggbo2rpkt6xfkix.us.auth0.com/api/v2/" # Required: Your application's client ID
+identity_jwt_assertion: # New root object for validator settings
+  # --- Configuration for validating incoming tokens ---
+  # To make this example self-contained, this section points the validator to the
+  # proxy's own token generator. This avoids external network dependencies.
 
-algorithms: # Optional: Defaults to ["RS256"] in nila-oidc
-  - "RS256"
-  - "HS256"
+  issuer: "https://id.nilaproxy.dev" # The validator will check for this 'iss' claim.
+  client_id: "my-test-client-id" # The validator will check for this 'aud' claim.
 
-# leeway_seconds: 60 # Optional: Defaults to 60 seconds
+  # We explicitly set the jwks_uri to the local endpoint to bypass OIDC discovery.
+  jwks_uri: "http://localhost:6188/.well-known/jwks.json"
 
-# If your OIDC provider's JWKS endpoint is sending a Cache-Control: max-age=15 header in its HTTP response, then the below value will be overridden by that value.
-cache_ttl_seconds: 3600 # Optional: Default fallback TTL for JWKS cache in seconds (e.g., 1 hour). Library default is 24h.
+  algorithms: # Optional: Defaults to ["RS256"] in nila-oidc
+    - "RS256"
 
-validate_nonce: false # Optional: Defaults to true. Set to false to disable nonce validation for this proxy.
+  # leeway_seconds: 60 # Optional: Defaults to 60 seconds
 
-claim_assertions: # Optional section for custom claim validations
-  required_claims: # Optional: List of claim names that MUST be present in the token
-    - "scope" # Assuming your token might have this
-  exact_match_claims: # Optional: Map of claim_name: expected_value
-    "sub": "NHhIYJ3ndvA3Qv25Iqoy7HPKjkY7r3gc@clients"
-    "scope": "read:client_grants"
+  cache_ttl_seconds: 3600 # Optional: Default fallback TTL for JWKS cache in seconds (e.g., 1 hour).
 
-logging: # New logging configuration section
-  output: "stdout"        # Example: "stdout" or "file"
-  level: "info"           # Can be "error", "warn", "info", "debug", "trace"
-  format: "json"          # Example: "json" or "text"
-  pretty_print_logs: false # Example: true or false
+  validate_nonce: false # Optional: Defaults to true. Set to false to disable nonce validation for this proxy.
 
+logging: # Logging configuration
+  level: "debug" # Can be "error", "warn", "info", "debug", "trace"
+
+identity_nila_op: # Optional: Configuration for acting as a token server (OpenID Provider)
+  issuer: "https://id.nilaproxy.dev" # The 'iss' claim for generated tokens
+  algorithm: "RS256" # The algorithm to use for signing. Can be "hs256", "rs256", etc.
+  token_ttl_seconds: 3600 # 1 hour
+  signing_key:
+    # If using 'rsa_pem' for signing, the proxy will expose a JWKS endpoint at /jwks
+    # containing the public key for discovery by clients. This is the recommended approach.
+    type: rsa_pem_file
+    value: "examples/identity_nila_op.pem" # Path to the PEM file relative to the project root.
+  clients: # This is the enum itself
+    # A map of client_id to its details
+    "my-test-client-id":
+      client_secret: "my-test-client-secret"
+      default_scopes: "read:all"
 listen_addr: "0.0.0.0:6188"
-upstream_addr: "httpbin.io:80" # Example upstream
+upstream_addr: "httpbin.org:80" # Must be in host:port format

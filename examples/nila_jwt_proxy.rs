@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use nila_oidc::prelude::*;
 use pingora_core::server::Server;
+use pingora_http::ResponseHeader;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::{Error, ErrorType, Result};
 use pingora_proxy::{ProxyHttp, Session};
@@ -19,16 +20,32 @@ struct LoggingConfig {
     //pretty_print_logs: Option<bool>, // Made optional
 }
 
+/// Corresponds to the `token_generator` section in the YAML
+#[derive(Debug, Deserialize, Clone)]
+struct GeneratorAppConfig { // This remains the same
+    issuer: url::Url,
+    algorithm: Algorithm,
+    token_ttl_seconds: u64,
+    clients: HashMap<String, ClientDetails>,
+    signing_key: SigningKeyConfig,
+}
+
+/// Corresponds to the `identity_jwt_assertion` section in the YAML
 #[derive(Debug, Deserialize)]
-struct ProxyAppConfig {
-    issuer_url: String,
+struct AssertionAppConfig {
+    issuer: String,
     client_id: String,
-    jwks_uri: Option<String>, // Optional direct JWKS URI
+    jwks_uri: Option<String>,
     algorithms: Option<Vec<String>>,
     leeway_seconds: Option<u64>,
     validate_nonce: Option<bool>,
-    cache_ttl_seconds: Option<u64>, // For default JWKS cache TTL
-    claim_assertions: Option<ClaimAssertionsConfig>, // Add this for new assertions
+    cache_ttl_seconds: Option<u64>,
+    claim_assertions: Option<ClaimAssertionsConfig>,
+}
+#[derive(Debug, Deserialize)]
+struct ProxyAppConfig {
+    identity_jwt_assertion: AssertionAppConfig,
+    identity_nila_op: Option<GeneratorAppConfig>,
     logging: Option<LoggingConfig>, // Updated to nested logging config
     listen_addr: String,
     upstream_addr: String,
@@ -48,7 +65,17 @@ struct ClaimAssertionsConfig {
 }
 struct JwtAuthService {
     validator: Arc<Validator>,
+    generator: Option<Arc<Generator>>, // Generator is optional
     upstream: UpstreamConfig,
+}
+
+/// Represents the form body of a client credentials request
+#[derive(Deserialize)]
+struct TokenRequestBody {
+    grant_type: String,
+    client_id: String,
+    client_secret: String,
+    scope: Option<String>,
 }
 
 #[async_trait]
@@ -57,6 +84,87 @@ impl ProxyHttp for JwtAuthService {
     fn new_ctx(&self) -> Self::CTX {}
 
     async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<bool> {
+        // --- Handle special, unauthenticated endpoints first ---
+
+        // Endpoint to expose the generator's public key set (JWKS)
+        if session.req_header().uri.path() == "/.well-known/jwks.json" && session.req_header().method == "GET" {
+            if let Some(generator) = &self.generator {
+                if let Some(jwks_response) = generator.get_public_jwks() {
+                    let mut resp_header = ResponseHeader::build(200, None)?;
+                    resp_header.insert_header("Content-Type", "application/json")?;
+                    let body_bytes = jwks_response.to_string().into_bytes();
+                    resp_header.insert_header("Content-Length", body_bytes.len().to_string())?;
+                    session.write_response_header(Box::new(resp_header), false).await?;
+                    session.write_response_body(Some(body_bytes.into()), true).await?;
+                } else {
+                    // Generator is configured but for a symmetric key (e.g., HS256), so no public keys to expose.
+                    tracing::warn!("Request to /jwks but no public key is available (likely using symmetric key).");
+                    session.respond_error(404).await?;
+                }
+            } else {
+                // Token generator is not configured at all.
+                tracing::error!("/jwks endpoint called but identity_nila_op is not configured.");
+                session.respond_error(501).await?; // Not Implemented
+            }
+            return Ok(true); // Request handled, stop processing.
+        }
+
+        // Endpoint for the OAuth2 token grant
+        if session.req_header().uri.path() == "/token" && session.req_header().method == "POST" { // Correctly access the path
+            if let Some(generator) = &self.generator {
+                // Read and parse the request body
+                let body = session.read_request_body().await?;
+                let body_bytes = body.unwrap_or_default();
+                let params: TokenRequestBody = match serde_urlencoded::from_bytes(&body_bytes) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse token request body: {}", e);
+                        session.respond_error(400).await?;
+                        return Ok(true);
+                    }
+                };
+
+                // Check grant type
+                if params.grant_type != "client_credentials" {
+                    tracing::warn!("Unsupported grant_type: {}", params.grant_type);
+                    session.respond_error(400).await?; // Or a more specific error
+                    return Ok(true);
+                }
+
+                // Issue the token
+                match generator.issue_token(&params.client_id, &params.client_secret, params.scope.as_deref()) {
+                    Ok(access_token) => {
+                        let response_body = serde_json::json!({
+                            "access_token": access_token,
+                            "token_type": "Bearer",
+                            "expires_in": generator.config.token_ttl_seconds
+                        });
+                        let mut resp_header = ResponseHeader::build(200, None)?; // Build the header
+                        resp_header.insert_header("Content-Type", "application/json")?;
+                        let body_bytes = response_body.to_string().into_bytes();
+                        resp_header.insert_header("Content-Length", body_bytes.len().to_string())?;
+                        session.write_response_header(Box::new(resp_header), false).await?; // end_stream = false because body is coming
+                        session.write_response_body(Some(body_bytes.into()), true).await?; // end_stream = true
+                    }
+                    Err(NilaOidcError::InvalidClientCredentials) => {
+                        tracing::warn!("Invalid client credentials for client_id: {}", params.client_id);
+                        session.respond_error(401).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Token generation error: {}", e);
+                        session.respond_error(500).await?;
+                    }
+                }
+            } else {
+                // Token generator is not configured
+                tracing::error!("Token endpoint called but identity_nila_op is not configured.");
+                session.respond_error(501).await?; // Not Implemented
+            }
+            return Ok(true); // Request is handled, stop processing.
+        }
+
+        // --- Default behavior: JWT validation for all other paths ---
+
         if let Some(auth_header) = session.req_header().headers.get("Authorization") {
             if let Ok(auth_str) = auth_header.to_str() {
                 if let Some(token) = auth_str.strip_prefix("Bearer ") {
@@ -70,7 +178,7 @@ impl ProxyHttp for JwtAuthService {
                             return Ok(false); // Continue to upstream
                         }
                         Err(e) => {
-                            eprintln!("Token validation failed: {}", e);
+                            tracing::warn!("Token validation failed: {}", e);
                             let _ = session.respond_error(401).await;
                             return Ok(true); // Filtered, request ends
                         }
@@ -80,7 +188,7 @@ impl ProxyHttp for JwtAuthService {
         }
 
         // No Bearer token found or malformed header
-        eprintln!("Missing or malformed Authorization: Bearer token");
+        tracing::warn!("Missing or malformed Authorization: Bearer token");
         let _ = session.respond_error(401).await;
         Ok(true) // Filtered, request ends
     }
@@ -98,6 +206,97 @@ impl ProxyHttp for JwtAuthService {
         ));
         Ok(peer)
     }
+}
+
+/// Sets up the token generator (Identity Provider) from the application configuration.
+fn setup_token_generator(
+    config: &Option<GeneratorAppConfig>,
+) -> Result<Option<Arc<Generator>>, Box<Error>> {
+    if let Some(gen_config_app) = config {
+        tracing::info!("Identity Provider (OP) generator configured.");
+        let gen_config = GeneratorConfig {
+            issuer: gen_config_app.issuer.clone(),
+            algorithm: gen_config_app.algorithm,
+            clients: gen_config_app.clients.clone(),
+            signing_key: gen_config_app.signing_key.clone(),
+            token_ttl_seconds: gen_config_app.token_ttl_seconds,
+        };
+        let generator = Generator::new(gen_config).map_err(|e| {
+            let mut err = Error::new(ErrorType::InternalError);
+            tracing::error!("Failed to create token generator: {:?}", e);
+            err.set_context(e.to_string());
+            err
+        })?;
+        Ok(Some(Arc::new(generator)))
+    } else {
+        tracing::info!("Token generator (identity_nila_op) not configured.");
+        Ok(None)
+    }
+}
+
+/// Sets up the JWT assertion (Validator) from the application configuration.
+fn setup_jwt_assertion(
+    config: &AssertionAppConfig,
+) -> Result<Arc<Validator>, Box<Error>> {
+    tracing::info!("Setting up JWT assertion (validator)...");
+
+    let mut oidc_builder = ConfigBuilder::new()
+        .issuer_url(&config.issuer)
+        .map_err(|e| {
+            let mut err = Error::new(ErrorType::InternalError);
+            err.set_context(format!("NilaOIDC config error for issuer_url: {:?}", e));
+            err
+        })?
+        .client_id(config.client_id.clone());
+
+    if let Some(jwks_uri_str) = &config.jwks_uri {
+        oidc_builder = oidc_builder.jwks_uri(jwks_uri_str).map_err(|e| {
+            let mut err = Error::new(ErrorType::InternalError);
+            err.set_context(format!("NilaOIDC config error (jwks_uri): {}", e));
+            err
+        })?;
+        tracing::info!("Using direct JWKS URI: {}", jwks_uri_str);
+    }
+
+    if let Some(algs_str) = &config.algorithms {
+        let algorithms: std::result::Result<Vec<Algorithm>, _> = algs_str
+            .iter()
+            .map(|s| Algorithm::from_str(s).map_err(|_| format!("Invalid algorithm string: {}", s)))
+            .collect();
+        oidc_builder = oidc_builder.algorithms(algorithms.map_err(|e| {
+            let mut err = Error::new(ErrorType::InternalError);
+            err.set_context(e);
+            err
+        })?);
+    }
+
+    if let Some(leeway_s) = config.leeway_seconds {
+        oidc_builder = oidc_builder.leeway(Duration::from_secs(leeway_s));
+    }
+
+    let should_validate_nonce = config.validate_nonce.unwrap_or(true);
+    oidc_builder = oidc_builder.validate_nonce(should_validate_nonce);
+
+    if let Some(ttl_seconds) = config.cache_ttl_seconds {
+        oidc_builder = oidc_builder.cache_ttl(Duration::from_secs(ttl_seconds));
+    }
+
+    if let Some(assertions) = &config.claim_assertions {
+        if let Some(required) = &assertions.required_claims {
+            oidc_builder = oidc_builder.required_claims(required.clone());
+        }
+        if let Some(exact_match) = &assertions.exact_match_claims {
+            oidc_builder = oidc_builder.exact_match_claims(exact_match.clone());
+        }
+    }
+
+    let oidc_config = oidc_builder.build().map_err(|e| {
+        let mut err = Error::new(ErrorType::InternalError);
+        err.set_context(format!("NilaOIDC config build error: {:?}", e));
+        err
+    })?;
+
+    Ok(Arc::new(Validator::new(oidc_config)))
 }
 
 fn main() -> Result<()> { // Changed to synchronous main
@@ -147,66 +346,11 @@ fn main() -> Result<()> { // Changed to synchronous main
     // or pass references if appropriate. For this example, using it directly is fine.
     let (jwt_auth_service, app_listen_addr_from_config) = runtime.block_on(async {
         // --- Configure Nila OIDC Validator ---
-        let mut oidc_builder = ConfigBuilder::new()
-            .issuer_url(&app_config.issuer_url)
-            .map_err(|e| {
-                let mut err = Error::new(ErrorType::InternalError);
-                err.set_context(format!("NilaOIDC config error for issuer_url: {:?}", e)); // Ensure {:?} is used for e
-                err // Return Error directly, ? will box it
-            })?
-            .client_id(app_config.client_id.clone());
+        // Setup generator first, as its JWKS endpoint might be used by the validator.
+        let generator = setup_token_generator(&app_config.identity_nila_op)?;
 
-        if let Some(jwks_uri_str) = &app_config.jwks_uri {
-            oidc_builder = oidc_builder.jwks_uri(jwks_uri_str)
-                .map_err(|e| {
-                    let mut err = Error::new(ErrorType::InternalError);
-                    err.set_context(format!("NilaOIDC config error (jwks_uri): {}", e));
-                    err // For NilaOidcError, {} should be fine due to thiserror, but {:?} is safer if issues persist.
-                })?;
-            println!("Using direct JWKS URI: {}", jwks_uri_str);
-        }
-
-        if let Some(algs_str) = &app_config.algorithms {
-            let algorithms_res: std::result::Result<Vec<Algorithm>, Box<Error>> = algs_str
-                .iter()
-                .map(|s_val| Algorithm::from_str(s_val).map_err(|_| {
-                    let mut err = Error::new(ErrorType::InternalError);
-                    err.set_context(format!("Invalid algorithm string: {}", s_val));
-                    err
-                }))
-                .collect();
-            oidc_builder = oidc_builder.algorithms(algorithms_res?);
-        }
-
-        if let Some(leeway_s) = app_config.leeway_seconds {
-            oidc_builder = oidc_builder.leeway(Duration::from_secs(leeway_s));
-        }
-
-        // Configure nonce validation based on YAML, defaulting to true if not specified in YAML.
-        // This assumes ValidationDetails::default() sets validate_nonce to true.
-        let should_validate_nonce = app_config.validate_nonce.unwrap_or(true);
-        oidc_builder = oidc_builder.validate_nonce(should_validate_nonce);
-
-        if let Some(ttl_seconds) = app_config.cache_ttl_seconds {
-            oidc_builder = oidc_builder.cache_ttl(Duration::from_secs(ttl_seconds));
-        }
-
-        if let Some(assertions) = &app_config.claim_assertions {
-            if let Some(required) = &assertions.required_claims {
-                oidc_builder = oidc_builder.required_claims(required.clone());
-            }
-            if let Some(exact_match) = &assertions.exact_match_claims {
-                oidc_builder = oidc_builder.exact_match_claims(exact_match.clone());
-            }
-        }
-        let oidc_config = oidc_builder.build()
-            .map_err(|e| {
-                let mut err = Error::new(ErrorType::InternalError);
-                err.set_context(format!("NilaOIDC config build error: {:?}", e)); // Ensure {:?} is used for e
-                err // Return Error directly, ? will box it
-            })?;
-
-        let validator = Arc::new(Validator::new(oidc_config));
+        // Setup validator.
+        let validator = setup_jwt_assertion(&app_config.identity_jwt_assertion)?;
 
         let upstream_sni = app_config.upstream_addr.split(':').next().unwrap_or(&app_config.upstream_addr).to_string();
         let upstream_config = UpstreamConfig {
@@ -215,7 +359,7 @@ fn main() -> Result<()> { // Changed to synchronous main
             sni: upstream_sni,
         };
 
-        Ok::<_, Box<Error>>((JwtAuthService { validator, upstream: upstream_config }, app_config.listen_addr.clone()))
+        Ok::<_, Box<Error>>((JwtAuthService { validator, generator, upstream: upstream_config }, app_config.listen_addr.clone()))
     })?; // The error from block_on's future is now Box<Error>
 
     // --- Configure Pingora Server ---
@@ -228,7 +372,9 @@ fn main() -> Result<()> { // Changed to synchronous main
     proxy_service.add_tcp(&app_listen_addr_from_config);
 
     tracing::info!("Pingora JWT proxy listening on {}", app_listen_addr_from_config);
-    println!("Test with: curl -v -H \"Authorization: Bearer <YOUR_JWT_TOKEN>\" http://localhost:6188/");
+    tracing::info!("Token endpoint available at POST http://localhost:6188/token");
+    //tracing::info!("JWKS endpoint available at GET(if asymmetric key is used)", jwks_uri_str);
+    tracing::info!("Test with: curl -v -H \"Authorization: Bearer <YOUR_JWT_TOKEN>\" http://localhost:6188/");
 
     my_server.add_service(proxy_service);
     my_server.run_forever();

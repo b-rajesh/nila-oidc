@@ -57,9 +57,7 @@ fn decode_raw_payload_to_value(token_str: &str) -> Result<serde_json::Value, Nil
     if parts.len() < 2 { // Need at least header and payload
         return Err(NilaOidcError::JwtValidation(jsonwebtoken::errors::ErrorKind::InvalidToken.into()));
     }
-    let payload_segment = parts[1];
-    let decoded_payload_bytes = base64_url::decode(payload_segment)
-        .map_err(NilaOidcError::Base64DecodeError)?;
+    let payload_segment = parts[1];    let decoded_payload_bytes = base64_url::decode(payload_segment)?;
     
     serde_json::from_slice(&decoded_payload_bytes)
         .map_err(|_| NilaOidcError::JwtValidation(
