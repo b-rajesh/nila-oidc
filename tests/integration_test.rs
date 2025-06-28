@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use url::Url;
+use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -75,7 +76,7 @@ async fn test_token_generation_and_validation_end_to_end() {
 
     // --- 2. GENERATE TOKEN ---
     let token = generator
-        .issue_token("test-client", "test-secret", None)
+        .issue_token("test-client", "test-secret", "client_credentials", None)
         .expect("Failed to issue token");
 
     // --- 3. SETUP MOCK JWKS ENDPOINT ---
@@ -119,6 +120,7 @@ async fn test_token_generation_and_validation_end_to_end() {
     assert_eq!(token_data.claims.iss, "https://id.test.local/");
     assert_eq!(token_data.claims.aud, "test-client");
     assert_eq!(token_data.claims.sub, "test-client");
+    assert!(Uuid::parse_str(&token_data.claims.jti).is_ok(), "JTI should be a valid UUID");
     println!(
         "✅ End-to-end test passed: Token generated, served via JWKS, and successfully validated."
     );
@@ -147,7 +149,7 @@ fn test_generator_invalid_client_credentials() {
 
     // --- TEST CASES ---
     // Case 1: Wrong client_id
-    let result_wrong_id = generator.issue_token("wrong-client", "correct-secret", None);
+    let result_wrong_id = generator.issue_token("wrong-client", "correct-secret", "client_credentials", None);
     assert!(matches!(
         result_wrong_id,
         Err(NilaOidcError::InvalidClientCredentials)
@@ -155,7 +157,7 @@ fn test_generator_invalid_client_credentials() {
     println!("✅ Correctly failed with wrong client ID.");
 
     // Case 2: Wrong client_secret
-    let result_wrong_secret = generator.issue_token("correct-client", "wrong-secret", None);
+    let result_wrong_secret = generator.issue_token("correct-client", "wrong-secret", "client_credentials", None);
     assert!(matches!(
         result_wrong_secret,
         Err(NilaOidcError::InvalidClientCredentials)
@@ -163,7 +165,7 @@ fn test_generator_invalid_client_credentials() {
     println!("✅ Correctly failed with wrong client secret.");
 
     // Case 3: Correct credentials
-    let result_correct = generator.issue_token("correct-client", "correct-secret", None);
+    let result_correct = generator.issue_token("correct-client", "correct-secret", "client_credentials", None);
     assert!(result_correct.is_ok());
     println!("✅ Correctly succeeded with valid credentials.");
 }

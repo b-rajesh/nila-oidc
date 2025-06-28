@@ -3,6 +3,7 @@ use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use sha2::{Digest, Sha256};
 use rsa::{pkcs8::DecodePrivateKey, RsaPrivateKey};
+use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
@@ -59,6 +60,7 @@ pub struct Generator {
 struct AccessTokenClaims<'a> {
     iss: &'a str,
     sub: &'a str,
+    jti: String,
     aud: &'a str, // Audience can be the same as issuer or a specific resource server
     exp: u64,
     iat: u64,
@@ -145,6 +147,7 @@ impl Generator {
         &self,
         client_id: &str,
         client_secret: &str,
+        grant_type: &str,
         scope: Option<&str>,
     ) -> Result<String, NilaOidcError> {
         tracing::debug!(client_id = %client_id, "Attempting to issue token.");
@@ -172,10 +175,11 @@ impl Generator {
         let claims = AccessTokenClaims {
             iss: self.config.issuer.as_str(),
             sub: client_id,
+            jti: Uuid::new_v4().to_string(),
             aud: client_id,
             iat: now,
             exp: now + self.config.token_ttl_seconds,
-            gty: "client-credentials",
+            gty: grant_type,
             scope: scope.or(client_details.default_scopes.as_deref()),
         };
 

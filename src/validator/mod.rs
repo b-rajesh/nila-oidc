@@ -1,8 +1,11 @@
-// src/validator.rs
+// src/validator/mod.rs
 
-use crate::client::JwksClient;
-use crate::config::{Config, KeySourceConfig};
+pub mod client;
+pub mod config;
+pub mod model;
 use crate::error::NilaOidcError;
+use client::JwksClient;
+use config::{Config, KeySourceConfig};
 use jsonwebtoken::{decode, decode_header, TokenData, Validation};
 use serde::de::DeserializeOwned; // Import DeserializeOwned
 use tracing::{debug, instrument};
@@ -37,6 +40,7 @@ pub struct Claims {
     pub aud: String,
     pub exp: u64,
     pub iat: u64,
+    pub jti: String,
     pub nonce: Option<String>,
     // Standard Claims struct should remain minimal.
     // Users can define their own structs with custom claims if they need typed access.

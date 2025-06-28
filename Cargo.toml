@@ -27,6 +27,7 @@ rsa = { version = "0.9.8", features = [
     "pem",
 ] } # Correct feature for PEM parsing
 sha2 = "0.10" # For JWK thumbprint generation
+uuid = { version = "1.8", features = ["v4"] } # For generating jti claim
 
 # JWT & JWKS Handling
 jsonwebtoken = { version = "9.3", features = [

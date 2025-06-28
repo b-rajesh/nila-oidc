@@ -1,7 +1,7 @@
 // src/client.rs
 
 use crate::error::NilaOidcError;
-use crate::model::{JsonWebKeySet, OidcDiscoveryDocument};
+use super::model::{JsonWebKeySet, OidcDiscoveryDocument};
 use jsonwebtoken::DecodingKey;
 use moka::future::Cache;
 use std::sync::Arc;

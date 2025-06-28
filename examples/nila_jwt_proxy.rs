@@ -132,7 +132,7 @@ impl ProxyHttp for JwtAuthService {
                 }
 
                 // Issue the token
-                match generator.issue_token(&params.client_id, &params.client_secret, params.scope.as_deref()) {
+                match generator.issue_token(&params.client_id, &params.client_secret, &params.grant_type, params.scope.as_deref()) {
                     Ok(access_token) => {
                         let response_body = serde_json::json!({
                             "access_token": access_token,
