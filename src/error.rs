@@ -19,6 +19,10 @@ pub enum NilaOidcError {
     #[error("A required configuration field is missing: {0}")]
     MissingConfiguration(String),
 
+    /// A configuration value is invalid.
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
     /// A provided URL could not be parsed.
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -87,4 +91,16 @@ pub enum NilaOidcError {
     /// An error occurred while decoding a Base64URL encoded string.
     #[error("Base64URL decoding error: {0}")]
     Base64DecodeError(#[from] DecodeError),
+
+    /// The grant type in the token request is not supported.
+    #[error("Unsupported grant type: {0}")]
+    UnsupportedGrantType(String),
+
+    /// The requested scope is invalid, unsupported, or not allowed for the client.
+    #[error("Invalid scope: {0}")]
+    InvalidScope(String),
+
+    /// Failed to deserialize the token's claims into the target struct.
+    #[error("Failed to deserialize claims: {0}")]
+    ClaimDeserializationError(String),
 }

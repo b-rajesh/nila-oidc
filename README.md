@@ -37,15 +37,20 @@ The `Validator` requires a `Config` object. Use the `ConfigBuilder` to construct
 
 ```rust
 async fn setup_validator() -> Result<Validator, NilaOidcError> {
+    // To assert claims, you would first create a HashMap:
+    // let mut claims_to_assert = std::collections::HashMap::new();
+    // claims_to_assert.insert("aud".to_string(), serde_json::json!("your_client_id"));
+
     let config = ConfigBuilder::new()
         .issuer_url("https://your-oidc-provider.com/.well-known/openid-configuration")? // Or the direct issuer URL
-        .client_id("your_client_id_registered_with_provider".to_string())
         // Optional: Override JWKS URI if not discoverable or different
         // .jwks_uri("https://your-oidc-provider.com/jwks")?
         // Optional: Set custom cache TTL for JWKS (if provider doesn't send Cache-Control)
         // .cache_ttl(Duration::from_secs(3600)) // 1 hour
         // Optional: Specify allowed algorithms (defaults to [Algorithm::RS256])
         .algorithms(vec![Algorithm::RS256, Algorithm::ES256])
+        // Optional: Enforce audience validation by asserting the 'aud' claim.
+        // .assert_claims(claims_to_assert)
         // Optional: Adjust clock skew tolerance (defaults to 60 seconds)
         // .leeway(Duration::from_secs(30))
         // Optional: Disable nonce validation (defaults to true)
@@ -60,13 +65,13 @@ async fn setup_validator() -> Result<Validator, NilaOidcError> {
 **Configuration Details (`Config` struct):**
 
 *   `issuer_url: Url`: **Required.** The issuer URL of your OIDC provider (e.g., `https://accounts.google.com`). This is used for discovery (to find the JWKS URI) and to validate the `iss` claim in the token.
-*   `client_id: String`: **Required.** Your application's client ID, as registered with the OIDC provider. This is used to validate the `aud` (audience) claim in the token.
 *   `jwks_uri: Option<Url>`: Optional. If you want to specify the JWKS URI directly, bypassing discovery from the `issuer_url`.
 *   `cache_ttl: Duration`: Optional. Fallback Time-To-Live for caching the JSON Web Key Set (JWKS). Defaults to 24 hours. This is used if the OIDC provider's JWKS endpoint doesn't provide `Cache-Control` headers.
 *   `validation: ValidationDetails`: Contains specific token validation parameters:
     *   `algorithms: Vec<Algorithm>`: **Required (defaults to `[Algorithm::RS256]`).** A list of JWT signing algorithms that your application will accept.
     *   `leeway: Duration`: Optional (defaults to 60 seconds). A duration to allow for clock skew between your server and the OIDC provider when validating time-based claims like `exp` (expiration) and `iat` (issued at).
     *   `validate_nonce: bool`: Optional (defaults to `true`). Whether to validate the `nonce` claim in the ID token. If `true`, you must provide the expected nonce when calling `validator.validate()`.
+    *   `assert_claims: Option<HashMap<String, serde_json::Value>>`: Optional. A map of claims to their expected values. This is the primary way to enforce audience (`aud`) validation. If `aud` is not in this map, it will not be validated.
 
 ### 4. Validate a Token
 
@@ -83,7 +88,7 @@ async fn DANGEROUS_do_validation(validator: &Validator, id_token_string: &str, e
     //     // Standard claims
     //     iss: String,
     //     sub: String,
-    //     aud: String,
+    //     aud: Option<String>,
     //     exp: u64,
     //     iat: u64,
     //     nonce: Option<String>,

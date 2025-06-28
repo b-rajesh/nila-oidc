@@ -26,26 +26,27 @@ struct GeneratorAppConfig { // This remains the same
     issuer: url::Url,
     algorithm: Algorithm,
     token_ttl_seconds: u64,
-    clients: HashMap<String, ClientDetails>,
     signing_key: SigningKeyConfig,
+    supported_scopes: Option<String>,
+    identity_nila_grant_type_extension: String,
 }
 
 /// Corresponds to the `identity_jwt_assertion` section in the YAML
 #[derive(Debug, Deserialize)]
 struct AssertionAppConfig {
     issuer: String,
-    client_id: String,
     jwks_uri: Option<String>,
     algorithms: Option<Vec<String>>,
     leeway_seconds: Option<u64>,
     validate_nonce: Option<bool>,
     cache_ttl_seconds: Option<u64>,
-    claim_assertions: Option<ClaimAssertionsConfig>,
+    assert_claims: Option<HashMap<String, serde_json::Value>>, // This now includes audience
 }
 #[derive(Debug, Deserialize)]
 struct ProxyAppConfig {
     identity_jwt_assertion: AssertionAppConfig,
     identity_nila_op: Option<GeneratorAppConfig>,
+    clients: HashMap<String, ClientDetails>,
     logging: Option<LoggingConfig>, // Updated to nested logging config
     listen_addr: String,
     upstream_addr: String,
@@ -56,12 +57,6 @@ struct UpstreamConfig {
     addr: String,
     tls: bool, // Assuming HttpPeer::new takes (addr, tls, sni)
     sni: String,
-}
-
-#[derive(Debug, Deserialize, Clone)] // Clone might be needed if passed around
-struct ClaimAssertionsConfig {
-    required_claims: Option<Vec<String>>,
-    exact_match_claims: Option<HashMap<String, serde_json::Value>>,
 }
 struct JwtAuthService {
     validator: Arc<Validator>,
@@ -74,7 +69,7 @@ struct JwtAuthService {
 struct TokenRequestBody {
     grant_type: String,
     client_id: String,
-    client_secret: String,
+    client_secret: Option<String>,
     scope: Option<String>,
 }
 
@@ -124,31 +119,38 @@ impl ProxyHttp for JwtAuthService {
                     }
                 };
 
-                // Check grant type
-                if params.grant_type != "client_credentials" {
-                    tracing::warn!("Unsupported grant_type: {}", params.grant_type);
-                    session.respond_error(400).await?; // Or a more specific error
-                    return Ok(true);
-                }
-
                 // Issue the token
-                match generator.issue_token(&params.client_id, &params.client_secret, &params.grant_type, params.scope.as_deref()) {
+                let client_secret = params.client_secret.as_deref().unwrap_or("");
+                match generator.issue_token(
+                    &params.client_id,
+                    client_secret,
+                    &params.grant_type,
+                    params.scope.as_deref(),
+                ) {
                     Ok(access_token) => {
                         let response_body = serde_json::json!({
                             "access_token": access_token,
                             "token_type": "Bearer",
                             "expires_in": generator.config.token_ttl_seconds
                         });
-                        let mut resp_header = ResponseHeader::build(200, None)?; // Build the header
+                        let mut resp_header = ResponseHeader::build(200, None)?;
                         resp_header.insert_header("Content-Type", "application/json")?;
                         let body_bytes = response_body.to_string().into_bytes();
                         resp_header.insert_header("Content-Length", body_bytes.len().to_string())?;
-                        session.write_response_header(Box::new(resp_header), false).await?; // end_stream = false because body is coming
-                        session.write_response_body(Some(body_bytes.into()), true).await?; // end_stream = true
+                        session.write_response_header(Box::new(resp_header), false).await?;
+                        session.write_response_body(Some(body_bytes.into()), true).await?;
                     }
                     Err(NilaOidcError::InvalidClientCredentials) => {
                         tracing::warn!("Invalid client credentials for client_id: {}", params.client_id);
                         session.respond_error(401).await?;
+                    }
+                    Err(NilaOidcError::UnsupportedGrantType(grant)) => {
+                        tracing::warn!("Unsupported grant_type: {}", grant);
+                        session.respond_error(400).await?;
+                    }
+                    Err(NilaOidcError::InvalidScope(scope_err)) => {
+                        tracing::warn!("Invalid scope requested: {}", scope_err);
+                        session.respond_error(400).await?;
                     }
                     Err(e) => {
                         tracing::error!("Token generation error: {}", e);
@@ -210,16 +212,19 @@ impl ProxyHttp for JwtAuthService {
 
 /// Sets up the token generator (Identity Provider) from the application configuration.
 fn setup_token_generator(
-    config: &Option<GeneratorAppConfig>,
+    op_config: &Option<GeneratorAppConfig>,
+    clients: &HashMap<String, ClientDetails>,
 ) -> Result<Option<Arc<Generator>>, Box<Error>> {
-    if let Some(gen_config_app) = config {
+    if let Some(gen_config_app) = op_config {
         tracing::info!("Identity Provider (OP) generator configured.");
         let gen_config = GeneratorConfig {
             issuer: gen_config_app.issuer.clone(),
             algorithm: gen_config_app.algorithm,
-            clients: gen_config_app.clients.clone(),
+            clients: clients.clone(),
             signing_key: gen_config_app.signing_key.clone(),
             token_ttl_seconds: gen_config_app.token_ttl_seconds,
+            supported_scopes: gen_config_app.supported_scopes.clone(),
+            identity_nila_grant_type_extension: gen_config_app.identity_nila_grant_type_extension.clone(),
         };
         let generator = Generator::new(gen_config).map_err(|e| {
             let mut err = Error::new(ErrorType::InternalError);
@@ -246,9 +251,7 @@ fn setup_jwt_assertion(
             let mut err = Error::new(ErrorType::InternalError);
             err.set_context(format!("NilaOIDC config error for issuer_url: {:?}", e));
             err
-        })?
-        .client_id(config.client_id.clone());
-
+        })?;
     if let Some(jwks_uri_str) = &config.jwks_uri {
         oidc_builder = oidc_builder.jwks_uri(jwks_uri_str).map_err(|e| {
             let mut err = Error::new(ErrorType::InternalError);
@@ -281,13 +284,8 @@ fn setup_jwt_assertion(
         oidc_builder = oidc_builder.cache_ttl(Duration::from_secs(ttl_seconds));
     }
 
-    if let Some(assertions) = &config.claim_assertions {
-        if let Some(required) = &assertions.required_claims {
-            oidc_builder = oidc_builder.required_claims(required.clone());
-        }
-        if let Some(exact_match) = &assertions.exact_match_claims {
-            oidc_builder = oidc_builder.exact_match_claims(exact_match.clone());
-        }
+    if let Some(claims_to_assert) = &config.assert_claims {
+        oidc_builder = oidc_builder.assert_claims(claims_to_assert.clone());
     }
 
     let oidc_config = oidc_builder.build().map_err(|e| {
@@ -347,7 +345,7 @@ fn main() -> Result<()> { // Changed to synchronous main
     let (jwt_auth_service, app_listen_addr_from_config) = runtime.block_on(async {
         // --- Configure Nila OIDC Validator ---
         // Setup generator first, as its JWKS endpoint might be used by the validator.
-        let generator = setup_token_generator(&app_config.identity_nila_op)?;
+        let generator = setup_token_generator(&app_config.identity_nila_op, &app_config.clients)?;
 
         // Setup validator.
         let validator = setup_jwt_assertion(&app_config.identity_jwt_assertion)?;

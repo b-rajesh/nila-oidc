@@ -6,18 +6,11 @@ pub mod model;
 use crate::error::NilaOidcError;
 use client::JwksClient;
 use config::{Config, KeySourceConfig};
-use jsonwebtoken::{decode, decode_header, TokenData, Validation};
+use jsonwebtoken::{decode, decode_header, DecodingKey, TokenData, Validation};
 use serde::de::DeserializeOwned; // Import DeserializeOwned
 use tracing::{debug, instrument};
 use serde::Deserialize; // Serialize is no longer needed on T for this
-use jsonwebtoken::DecodingKey;
-use serde::Serialize;
-/// The main OIDC ID Token validator.
-/// Trait for claims types that include a nonce.
-pub trait HasNonce {
-    /// Returns the nonce claim, if present.
-    fn get_nonce(&self) -> Option<&str>;
-}
+
 ///
 /// This struct is initialized with a `Config` and should be created once
 /// and reused for all validation requests. It manages the JWKS client
@@ -33,11 +26,11 @@ pub struct Validator {
 ///
 /// This struct contains the standard OIDC claims. Custom claims can be
 /// included by creating a new struct that implements `serde::Deserialize` and `HasNonce`.
-#[derive(Debug, Deserialize, Serialize)] // Serialize is still useful if users want to log/pass around the typed claims
+#[derive(Debug, Deserialize)]
 pub struct Claims {
     pub iss: String,
     pub sub: String,
-    pub aud: String,
+    pub aud: Option<String>,
     pub exp: u64,
     pub iat: u64,
     pub jti: String,
@@ -48,25 +41,6 @@ pub struct Claims {
     // Add other custom claims here if needed.
 }
 
-// Implement HasNonce for the standard Claims struct.
-impl HasNonce for Claims {
-    fn get_nonce(&self) -> Option<&str> {
-        self.nonce.as_deref()
-    }
-}
-
-// Helper function to decode JWT payload segment
-fn decode_raw_payload_to_value(token_str: &str) -> Result<serde_json::Value, NilaOidcError> {
-    let parts: Vec<&str> = token_str.split('.').collect();
-    if parts.len() < 2 { // Need at least header and payload
-        return Err(NilaOidcError::JwtValidation(jsonwebtoken::errors::ErrorKind::InvalidToken.into()));
-    }
-    let payload_segment = parts[1];    let decoded_payload_bytes = base64_url::decode(payload_segment)?;
-    
-    serde_json::from_slice(&decoded_payload_bytes)
-        .map_err(|_| NilaOidcError::JwtValidation(
-            jsonwebtoken::errors::ErrorKind::InvalidToken.into()))
-}
 
 impl Validator {
     /// Creates a new `Validator` with the given configuration.
@@ -101,7 +75,7 @@ impl Validator {
     ///
     /// A `TokenData` object containing the decoded claims if validation is successful.
     #[instrument(skip(self, token), err)]
-    pub async fn validate<T: DeserializeOwned + HasNonce>( // Removed Serialize bound from T
+    pub async fn validate<T: DeserializeOwned>(
         &self,
         token: &str,
         nonce_to_verify: Option<&str>,
@@ -141,67 +115,102 @@ impl Validator {
         validation.leeway = self.config.validation.leeway.as_secs();
         // issuer_url is not optional in Config, so we can use it directly.
         validation.set_issuer(&[self.config.issuer_url.as_str()]);
-        validation.set_audience(&[&self.config.client_id]); // client_id is typically required as audience
-        validation.set_required_spec_claims(&["exp", "iat", "iss", "aud", "sub"]);
 
-        // 5. Decode and validate the token.
-        let token_data = decode::<T>(token, &decoding_key, &validation)
+        // --- Special Handling for Audience from `assert_claims` ---
+        let mut audience_is_configured = false;
+        if let Some(claims_to_assert) = &self.config.validation.assert_claims {
+            if let Some(aud_value) = claims_to_assert.get("aud") {
+                let audiences: Vec<String> = match aud_value {
+                    serde_json::Value::String(s) => vec![s.clone()],
+                    serde_json::Value::Array(arr) => arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect(),
+                    _ => {
+                        return Err(NilaOidcError::InvalidConfiguration(
+                            "'aud' in assert_claims must be a string or an array of strings".to_string(),
+                        ));
+                    }
+                };
+                if !audiences.is_empty() {
+                    validation.set_audience(&audiences);
+                    audience_is_configured = true;
+                }
+            }
+        }
+
+        // This is the key change: Explicitly disable audience validation in the underlying
+        // library if it has not been configured. Otherwise, the library's default
+        // behavior will cause an `InvalidAudience` error if a token contains an `aud` claim.
+        if !audience_is_configured {
+            validation.validate_aud = false;
+        }
+        // The 'jsonwebtoken' crate automatically requires 'exp', 'iat', 'iss', 'sub'
+        // if they are set in the validation struct. We only need to conditionally
+        // require 'aud', and also respect any user-defined required claims.
+        let mut required_claims: std::collections::HashSet<&str> =
+            ["exp", "iat", "iss", "sub"].iter().cloned().collect();
+
+        if audience_is_configured {
+            required_claims.insert("aud");
+        }
+
+        // Add any user-defined required claims from the config.
+        if let Some(user_required_claims) = &self.config.validation.required_claims {
+            for claim in user_required_claims {
+                required_claims.insert(claim);
+            }
+        }
+
+        let final_required_claims: Vec<&str> = required_claims.into_iter().collect();
+        validation.set_required_spec_claims(&final_required_claims);
+
+        // 5. Decode the token into a generic serde_json::Value first. This performs
+        // all standard JWT validation: signature, expiry, issuer, and (if configured) audience.
+        let token_data_value = decode::<serde_json::Value>(token, &decoding_key, &validation)
             .map_err(NilaOidcError::JwtValidation)?;
 
-        // 6. Validate the nonce if required.
+        let all_claims_in_token = token_data_value.claims;
+
+        // 6. Perform custom claim assertions if configured.
+        if let Some(claims_to_assert) = &self.config.validation.assert_claims {
+            for (claim_name, expected_value) in claims_to_assert {
+                // Audience is already validated by the `decode` function, so we can skip it here.
+                if claim_name == "aud" && audience_is_configured {
+                    continue;
+                }
+                match all_claims_in_token.get(claim_name) {
+                    Some(actual_value) if actual_value == expected_value => {
+                        // Value matches, continue
+                    }
+                    Some(actual_value) => {
+                        debug!("Claim value mismatch for '{}'. Expected: {:?}, Actual: {:?}", claim_name, expected_value, actual_value);
+                        return Err(NilaOidcError::ClaimValueMismatch { claim: claim_name.clone(), expected: expected_value.clone(), actual: actual_value.clone() });
+                    }
+                    None => {
+                        debug!("Claim '{}' expected for exact match not found in token.", claim_name);
+                        return Err(NilaOidcError::ClaimValueMismatch {
+                            claim: claim_name.clone(),
+                            expected: expected_value.clone(),
+                            actual: serde_json::Value::Null,
+                        });
+                    }
+                }
+            }
+        }
+        // 7. Validate the nonce if required.
         if self.config.validation.validate_nonce {
-            let expected_nonce_value = nonce_to_verify
-                .ok_or(NilaOidcError::MissingNonceForValidation)?;
-
-            // Use the HasNonce trait to get the nonce from the claims.
-            let token_nonce_value = token_data.claims.get_nonce()
-                .ok_or(NilaOidcError::MissingNonceInToken)?;
-
+            let expected_nonce_value = nonce_to_verify.ok_or(NilaOidcError::MissingNonceForValidation)?;
+            let token_nonce_value = all_claims_in_token.get("nonce").and_then(|v| v.as_str()).ok_or(NilaOidcError::MissingNonceInToken)?;
             if expected_nonce_value != token_nonce_value {
                 return Err(NilaOidcError::NonceMismatch);
             }
         }
+       // 8. If all validation passes, deserialize the generic Value into the user's target type T.
+        let final_claims: T = serde_json::from_value(all_claims_in_token)
+            .map_err(|e| NilaOidcError::ClaimDeserializationError(e.to_string()))?;
 
-        // 7. Perform custom claim assertions if configured.
-        // To do this generically, we'll serialize T to serde_json::Value.
-        if self.config.validation.required_claims.is_some() || self.config.validation.exact_match_claims.is_some() {
-            // Decode the raw payload to get all claims, regardless of T's structure
-            let all_claims_in_token = decode_raw_payload_to_value(token)?;
-            debug!("All claims in token for custom validation: {}", all_claims_in_token.to_string());
+        Ok(TokenData { header: token_data_value.header, claims: final_claims })
 
-            if let Some(required_claims) = &self.config.validation.required_claims {
-                for claim_name in required_claims {
-                    debug!("Checking required claim: '{}', Value in token: {:?}", claim_name, all_claims_in_token.get(claim_name));
-                    if all_claims_in_token.get(claim_name).is_none() || all_claims_in_token.get(claim_name).unwrap().is_null() {
-                        debug!("Missing required claim: {}", claim_name);
-                        return Err(NilaOidcError::MissingRequiredClaim(claim_name.clone()));
-                    }
-                }
-            }
-
-            if let Some(exact_match_claims) = &self.config.validation.exact_match_claims {
-                for (claim_name, expected_value) in exact_match_claims {
-                    match all_claims_in_token.get(claim_name) {
-                        Some(actual_value) if actual_value == expected_value => {
-                            // Value matches, continue
-                        }
-                        Some(actual_value) => {
-                            debug!("Claim value mismatch for '{}'. Expected: {:?}, Actual: {:?}", claim_name, expected_value, actual_value);
-                            return Err(NilaOidcError::ClaimValueMismatch { claim: claim_name.clone(), expected: expected_value.clone(), actual: actual_value.clone() });
-                        }
-                        None => { // Claim not present, but was it in required_claims? If not, this is effectively a mismatch if an exact value was expected.
-                            debug!("Claim '{}' expected for exact match not found in token.", claim_name);
-                            let mismatch_error = NilaOidcError::ClaimValueMismatch {
-                                claim: claim_name.clone(),
-                                expected: expected_value.clone(),
-                                actual: serde_json::Value::Null
-                            };
-                            return Err(mismatch_error);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(token_data)
     }
 }

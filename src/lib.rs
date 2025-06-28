@@ -16,7 +16,8 @@ pub mod prelude {
     };
     pub use crate::validator::{
         config::{Config, ConfigBuilder},
-        Claims, HasNonce, Validator,    };
+        Claims, Validator,
+    };
 
     pub use jsonwebtoken::Algorithm;
 }

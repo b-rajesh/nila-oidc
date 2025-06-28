@@ -23,8 +23,9 @@ use url::Url;
     pub validate_nonce: bool,
     /// A list of claim names that must be present in the token.
     pub required_claims: Option<Vec<String>>,
-    /// A map of claim names to their expected exact values.
-    pub exact_match_claims: Option<HashMap<String, serde_json::Value>>,
+    /// A map of claim names to their expected exact values. This will now handle audience.
+    pub assert_claims: Option<HashMap<String, serde_json::Value>>, // This will now handle audience
+
 }
 
 impl Default for ValidationDetails {
@@ -35,7 +36,8 @@ impl Default for ValidationDetails {
             leeway: Duration::from_secs(60),
             validate_nonce: true,
             required_claims: None,
-            exact_match_claims: None,
+            assert_claims: None,
+
         }
     }
 }
@@ -63,9 +65,6 @@ pub enum KeySourceConfig {
     /// The issuer URL of the OIDC provider. This is used for discovery and to
     /// validate the `iss` claim of the ID Token.
     pub issuer_url: Url,
-    /// The client ID of the application, as registered with the OIDC provider.
-    /// This is used to validate the `aud` claim of the ID Token.
-    pub client_id: String,
     /// The specific validation parameters to apply to the token.
     pub validation: ValidationDetails,
     /// The source for obtaining JWT validation keys.
@@ -79,7 +78,6 @@ pub enum KeySourceConfig {
 
 #[derive(Default)] pub struct ConfigBuilder {
     issuer_url: Option<Url>,
-    client_id: Option<String>,
     jwks_uri_option: Option<Url>, // Renamed to avoid conflict with method
     cache_ttl_option: Option<Duration>, // Renamed for clarity
     shared_secret_option: Option<Vec<u8>>,
@@ -101,12 +99,6 @@ impl ConfigBuilder {
         let parsed_url = Url::parse(url).map_err(|e| NilaOidcError::InvalidUrl(e.to_string()))?;
         self.issuer_url = Some(parsed_url);
         Ok(self)
-    }
-
-    /// Sets the client ID of the application. This is a required field.
-    pub fn client_id(mut self, client_id: String) -> Self {
-        self.client_id = Some(client_id);
-        self
     }
 
     /// Sets an explicit JWKS URI, bypassing OIDC discovery. This is optional.
@@ -162,9 +154,11 @@ impl ConfigBuilder {
     }
 
     /// Sets a map of claim names to their expected exact values.
-    /// The values should be `serde_json::Value` to support various JSON types (string, number, boolean).
-    pub fn exact_match_claims(mut self, claims: HashMap<String, serde_json::Value>) -> Self {
-        self.validation.exact_match_claims = Some(claims);
+    ///
+    /// This is a powerful feature for enforcing specific values for any claim in the token,
+    /// including standard claims like `aud` (audience) or any custom claims.
+    pub fn assert_claims(mut self, claims: HashMap<String, serde_json::Value>) -> Self {
+        self.validation.assert_claims = Some(claims);
         self
     }
 
@@ -172,10 +166,9 @@ impl ConfigBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if required fields (`issuer_url`, `client_id`) are missing.
+    /// Returns an error if the required `issuer_url` field is missing.
     pub fn build(self) -> Result<Config, NilaOidcError> {
         let issuer_url = self.issuer_url.ok_or(NilaOidcError::MissingConfiguration("issuer_url".to_string()))?;
-        let client_id = self.client_id.ok_or(NilaOidcError::MissingConfiguration("client_id".to_string()))?;
 
         let key_source = if let Some(secret) = self.shared_secret_option {
             if self.jwks_uri_option.is_some() {
@@ -193,7 +186,6 @@ impl ConfigBuilder {
 
         Ok(Config {
             issuer_url,
-            client_id,
             validation: self.validation,
             key_source,
         })

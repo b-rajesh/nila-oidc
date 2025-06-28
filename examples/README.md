@@ -10,12 +10,14 @@ This example showcases a simple HTTP proxy built with Pingora that uses `nila-oi
 
 The proxy's behavior is configured via the `examples/proxy_config.yaml` file. You'll need to customize this file with your OIDC provider's details:
 
-*   `issuer_url`: **Required.** The issuer URL of your OIDC provider (e.g., `https://accounts.google.com`).
-*   `client_id`: **Required.** Your application's client ID, as registered with the OIDC provider. This is crucial for validating the `aud` (audience) claim in the token.
-*   `jwks_uri` (Optional): You can uncomment and set this to directly specify the JWKS endpoint, bypassing OIDC discovery.
-*   `algorithms` (Optional): A list of JWT signing algorithms to accept (e.g., `["RS256"]`). Defaults to `["RS256"]` if not specified.
-*   `leeway_seconds` (Optional): Clock skew tolerance in seconds. Defaults to 60.
-*   `identity_nila_op` (Optional): A section to configure the built-in OAuth2 token server (acting as an OpenID Provider) for the Client Credentials Grant.
+*   `identity_jwt_assertion`: Configuration for the validator (Resource Server).
+    *   `issuer`: **Required.** The issuer URL of your OIDC provider (e.g., `https://accounts.google.com`).
+    *   `jwks_uri` (Optional): You can uncomment and set this to directly specify the JWKS endpoint, bypassing OIDC discovery.
+    *   `algorithms` (Optional): A list of JWT signing algorithms to accept (e.g., `["RS256"]`). Defaults to `["RS256"]` if not specified.
+    *   `leeway_seconds` (Optional): Clock skew tolerance in seconds. Defaults to 60.
+    *   `assert_claims` (Optional): A map of claims to their expected values. This is how you enforce specific claims.
+        *   **Audience Validation:** To validate the `aud` claim, add it to this map. If `aud` is not present here, audience validation will be skipped.
+*   `identity_nila_op` (Optional): A section to configure the built-in OAuth2 token server (acting as an OpenID Provider).
     *   `issuer`: The `iss` claim value for generated tokens.
     *   `algorithm`: The algorithm to use for signing, e.g., "HS256" or "RS256".
     *   `token_ttl_seconds`: The lifetime of generated tokens in seconds.
@@ -29,12 +31,15 @@ The proxy's behavior is configured via the `examples/proxy_config.yaml` file. Yo
 
 **Example `proxy_config.yaml`:**
 ```yaml
-issuer_url: "https://accounts.google.com"
-client_id: "your-client-id-for-validation" # <-- IMPORTANT: Replace this!
-# jwks_uri: "https://www.googleapis.com/oauth2/v3/certs"
-algorithms:
-  - "RS256"
-leeway_seconds: 60
+identity_jwt_assertion:
+  issuer: "https://id.nilaproxy.dev"
+  jwks_uri: "http://localhost:6188/.well-known/jwks.json"
+  algorithms:
+    - "RS256"
+  # To enforce audience validation, add the 'aud' claim here.
+  # If this section is commented out, audience will not be validated.
+  # assert_claims:
+  #   aud: "my-test-client-id"
 
 identity_nila_op:
   issuer: "https://nila-oidc.dev"

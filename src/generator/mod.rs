@@ -15,8 +15,10 @@ use rsa::pkcs1::EncodeRsaPrivateKey;
 /// Details for a client that is allowed to request tokens.
 #[derive(Deserialize, Clone, Debug)]
 pub struct ClientDetails {
-    /// The client secret. In a production system, this should be a securely stored hash.
-    pub client_secret: String,
+    /// The client secret. Required unless the client is marked as public.
+    pub client_secret: Option<String>,
+    /// A space-separated string of scopes the client is allowed to request. Must be a subset of the OP's `supported_scopes`.
+    pub allowed_scopes: Option<String>,
     /// A space-separated string of default scopes to grant if none are requested.
     pub default_scopes: Option<String>,
 }
@@ -45,6 +47,10 @@ pub struct GeneratorConfig {
     pub token_ttl_seconds: u64,
     /// The key material used for signing tokens.
     pub signing_key: SigningKeyConfig,
+    /// A space-separated list of all scopes this provider supports.
+    pub supported_scopes: Option<String>,
+    /// The mandatory custom grant type URI for the public client flow.
+    pub identity_nila_grant_type_extension: String,
 }
 
 /// A JWT token generator for the OAuth2 Client Credentials Grant.
@@ -71,7 +77,30 @@ struct AccessTokenClaims<'a> {
 
 impl Generator {
     /// Creates a new `Generator` with the given configuration.
+    ///
+    /// This function also validates the configuration to ensure that all configured
+    /// per-client scopes (`allowed_scopes` and `default_scopes`) are valid
+    /// according to the globally `supported_scopes`.
     pub fn new(config: GeneratorConfig) -> Result<Self, NilaOidcError> {
+        // --- Validate Scope Configuration at Startup ---
+        if let Some(supported_scopes_str) = &config.supported_scopes {
+            let supported: std::collections::HashSet<&str> = supported_scopes_str.split_whitespace().collect();
+            for (client_id, details) in &config.clients {
+                if let Some(allowed_scopes_str) = &details.allowed_scopes {
+                    let allowed: std::collections::HashSet<&str> = allowed_scopes_str.split_whitespace().collect();
+                    if !allowed.is_subset(&supported) {
+                        return Err(NilaOidcError::InvalidScope(format!("Client '{}' is configured with allowed_scopes that are not in the supported_scopes list.", client_id)));
+                    }
+                }
+                if let Some(default_scopes_str) = &details.default_scopes {
+                     let default: std::collections::HashSet<&str> = default_scopes_str.split_whitespace().collect();
+                     if !default.is_subset(&supported) {
+                        return Err(NilaOidcError::InvalidScope(format!("Client '{}' is configured with default_scopes that are not in the supported_scopes list.", client_id)));
+                    }
+                }
+            }
+        }
+
         let (encoding_key, public_jwk) = match &config.signing_key {
             SigningKeyConfig::SharedSecret(secret) => {
                 (EncodingKey::from_secret(secret.as_bytes()), None)
@@ -161,12 +190,51 @@ impl Generator {
                 NilaOidcError::InvalidClientCredentials
             })?;
 
-        if client_details.client_secret != client_secret {
-            tracing::warn!(client_id = %client_id, "Client secret mismatch provided.");
-            return Err(NilaOidcError::InvalidClientCredentials);
+        // Validate credentials based on the grant type.
+        match grant_type {
+            "client_credentials" => {
+                // This grant type requires a client secret that must match the configured one.
+                if client_details.client_secret.as_deref() != Some(client_secret) {
+                    tracing::warn!(client_id = %client_id, "Client secret mismatch or not provided for 'client_credentials' grant.");
+                    return Err(NilaOidcError::InvalidClientCredentials);
+                }
+            }
+            g if g == self.config.identity_nila_grant_type_extension => {
+                // For the public grant type, we only validate that the client_id exists.
+                // No secret check is performed.
+            }
+            unsupported_grant => {
+                return Err(NilaOidcError::UnsupportedGrantType(unsupported_grant.to_string()));
+            }
         }
 
         tracing::debug!(client_id = %client_id, "Client credentials validated successfully.");
+
+        // --- Scope Validation ---
+        let final_scope = match scope {
+            Some(requested_scope_str) => {
+                // If scopes are requested, they must be validated against the client's allowed scopes.
+                let allowed: std::collections::HashSet<&str> = client_details.allowed_scopes.as_deref().unwrap_or("").split_whitespace().collect();
+                let requested: std::collections::HashSet<&str> = requested_scope_str.split_whitespace().collect();
+
+                if requested.is_empty() {
+                    // If the requested scope string is present but empty, use default scopes.
+                    client_details.default_scopes.as_deref()
+                } else if requested.is_subset(&allowed) {
+                    // All requested scopes are allowed.
+                    Some(requested_scope_str)
+                } else {
+                    // At least one requested scope is not allowed.
+                    let invalid_scopes: Vec<&&str> = requested.difference(&allowed).collect();
+                    tracing::warn!(client_id = %client_id, "Client requested invalid scopes: {:?}", invalid_scopes);
+                    return Err(NilaOidcError::InvalidScope(format!("The following scopes are not permitted for this client: {:?}", invalid_scopes)));
+                }
+            }
+            None => {
+                // No scopes were requested, so grant the default scopes.
+                client_details.default_scopes.as_deref()
+            }
+        };
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -180,7 +248,7 @@ impl Generator {
             iat: now,
             exp: now + self.config.token_ttl_seconds,
             gty: grant_type,
-            scope: scope.or(client_details.default_scopes.as_deref()),
+            scope: final_scope,
         };
 
         // Create the header and include the kid if it's an asymmetric key

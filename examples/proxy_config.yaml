@@ -1,12 +1,11 @@
 # Example configuration for the Pingora JWT Proxy
 
 identity_jwt_assertion: # New root object for validator settings
-  # --- Configuration for validating incoming tokens ---
+  # --- Configuration for the proxy acting as a RESOURCE SERVER, protecting one or more services ---
   # To make this example self-contained, this section points the validator to the
   # proxy's own token generator. This avoids external network dependencies.
 
   issuer: "https://id.nilaproxy.dev" # The validator will check for this 'iss' claim.
-  client_id: "my-test-client-id" # The validator will check for this 'aud' claim.
 
   # We explicitly set the jwks_uri to the local endpoint to bypass OIDC discovery.
   jwks_uri: "http://localhost:6188/.well-known/jwks.json"
@@ -20,6 +19,14 @@ identity_jwt_assertion: # New root object for validator settings
 
   validate_nonce: false # Optional: Defaults to true. Set to false to disable nonce validation for this proxy.
 
+  # (Optional) A map of claims to assert for exact-match validation.
+  # The 'aud' claim is special: it can be a single string or a list of strings.
+  assert_claims:
+    aud: # Example of checking against multiple valid audiences
+      - "my-test-client-id"
+      - "my-apikey-client"
+    #gty: "client-credentials" # Example: only accept tokens from the client credentials grant
+
 logging: # Logging configuration
   level: "debug" # Can be "error", "warn", "info", "debug", "trace"
 
@@ -32,10 +39,20 @@ identity_nila_op: # Optional: Configuration for acting as a token server (OpenID
     # containing the public key for discovery by clients. This is the recommended approach.
     type: rsa_pem_file
     value: "examples/identity_nila_op.pem" # Path to the PEM file relative to the project root.
-  clients: # This is the enum itself
-    # A map of client_id to its details
-    "my-test-client-id":
-      client_secret: "my-test-client-secret"
-      default_scopes: "read:all"
+  # (Optional) A space-separated list of all scopes this provider supports.
+  # If provided, it will be used to validate the `allowed_scopes` of each client at startup.
+  supported_scopes: "read:all write:all read:public admin:all customer-api"
+  # The grant type URI for the secret-less public client flow. This is mandatory.
+  identity_nila_grant_type_extension: "http://id.nilaproxy.dev/oauth2/grant-type/api-key"
+
+clients: # Top-level registry of all client applications this OP can issue tokens for.
+  "my-test-client-id":
+    client_secret: "my-test-client-secret"
+    allowed_scopes: "read:all write:all"
+    default_scopes: "read:all"
+  "my-apikey-client":
+    allowed_scopes: "customer-api"
+    default_scopes: "customer-api"
+
 listen_addr: "0.0.0.0:6188"
 upstream_addr: "httpbin.org:80" # Must be in host:port format
