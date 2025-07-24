@@ -1,6 +1,6 @@
 [workspace]
 members = ["nila-oidc-op","nila-oidc-rp"]
-resolver = "3"
+resolver = "2"
 
 [workspace.package]
 edition = "2024"

@@ -1,10 +1,11 @@
 [package]
-name = "openidconnect"
-version = "3.0.0"
-authors = ["David A. Ramos <ramos@cs.stanford.edu>"]
-description = "OpenID Connect library"
-license = "MIT"
-repository = "https://github.com/ramosbugs/openidconnect-rs"
+name = "nila-oidc-rp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file = "LICENSE"
+description = "A friendly OpenID Connect (OIDC) relying party (client)."
+repository.workspace = true
 edition = "2024"
 readme = "README.md"
 
@@ -27,40 +28,33 @@ nightly = []
 
 [dependencies]
 rand = { version = "0.9", default-features = false, features = ["std", "thread_rng"] }
-base64 = "0.13"
-# Disable 'time' dependency since it triggers RUSTSEC-2020-0071 and we don't need it.
-chrono = { version = "0.4", default-features = false, features = [
-    "clock",
-    "std",
-] }
-thiserror = "1.0"
+base64.workspace = true
+chrono = { workspace = true, default-features = false, features = ["clock", "std"] }
+thiserror.workspace = true
 http = "0.2"
 itertools = "0.10"
-log = "0.4"
+log.workspace = true
 oauth2 = { version = "4.2.2", default-features = false }
 hmac = "0.12.1"
-rsa = "0.7.2"
-sha2 = { version = "0.10.6", features = ["oid"] } # Object ID needed for pkcs1v15 padding
+rsa = { workspace = true, features = ["pkcs1v15"] }
+sha2 = { workspace = true, features = ["oid"] }
 p256 = "0.11.1"
 p384 = "0.11.2"
 dyn-clone = "1.0.10"
-serde = "1.0"
+serde.workspace = true
 serde_derive = "1.0"
-serde_json = "1.0"
+serde_json.workspace = true
 serde_path_to_error = "0.1"
 serde_plain = "1.0"
 serde_with = "1.13"
 serde-value = "0.7"
-url = { version = "2.1", features = ["serde"] }
+url = { workspace = true, features = ["serde"] }
 subtle = "2.4"
 
 [dev-dependencies]
-color-backtrace = { version = "0.5" }
+color-backtrace = "0.5"
 env_logger = "0.9"
 pretty_assertions = "1.0"
-reqwest_ = { package = "reqwest", features = [
-    "blocking",
-    "rustls-tls",
-], version = "0.11", default-features = false }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"], default-features = false }
 retry = "1.0"
 anyhow = "1.0"
