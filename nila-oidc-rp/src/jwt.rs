@@ -88,8 +88,8 @@ where
         SE: Serializer,
     {
         match self {
-            JsonWebTokenAlgorithm::Encryption(ref enc) => enc.serialize(serializer),
-            JsonWebTokenAlgorithm::Signature(ref sig, _) => sig.serialize(serializer),
+            JsonWebTokenAlgorithm::Encryption(enc) => enc.serialize(serializer),
+            JsonWebTokenAlgorithm::Signature(sig, _) => sig.serialize(serializer),
             JsonWebTokenAlgorithm::None => serializer.serialize_str("none"),
         }
     }

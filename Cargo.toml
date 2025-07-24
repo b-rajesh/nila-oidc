@@ -1,11 +1,11 @@
 [workspace]
-members = ["nila-oidc-op"]
+members = ["nila-oidc-op","nila-oidc-rp"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.86"
-authors = ["Rajesh <you@example.com>"]
+authors = ["Rajesh <rajesh.bavan@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/b-rajesh/nila-oidc"
 
@@ -16,3 +16,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "clock"] }
 thiserror = "1.0"
 url = "2.5"
+resolver = "3"

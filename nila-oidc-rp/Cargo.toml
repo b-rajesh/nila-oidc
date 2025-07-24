@@ -5,7 +5,7 @@ authors = ["David A. Ramos <ramos@cs.stanford.edu>"]
 description = "OpenID Connect library"
 license = "MIT"
 repository = "https://github.com/ramosbugs/openidconnect-rs"
-edition = "2021"
+edition = "2024"
 readme = "README.md"
 
 [package.metadata.docs.rs]
@@ -26,6 +26,7 @@ accept-string-booleans = []
 nightly = []
 
 [dependencies]
+rand = { version = "0.9", default-features = false, features = ["std", "thread_rng"] }
 base64 = "0.13"
 # Disable 'time' dependency since it triggers RUSTSEC-2020-0071 and we don't need it.
 chrono = { version = "0.4", default-features = false, features = [
@@ -37,7 +38,6 @@ http = "0.2"
 itertools = "0.10"
 log = "0.4"
 oauth2 = { version = "4.2.2", default-features = false }
-rand = "0.8.5"
 hmac = "0.12.1"
 rsa = "0.7.2"
 sha2 = { version = "0.10.6", features = ["oid"] } # Object ID needed for pkcs1v15 padding

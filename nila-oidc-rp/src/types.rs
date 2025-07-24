@@ -912,7 +912,7 @@ new_secret_type![
         /// * `num_bytes` - Number of random bytes to generate, prior to base64-encoding.
         ///
         pub fn new_random_len(num_bytes: u32) -> Self {
-            let random_bytes: Vec<u8> = (0..num_bytes).map(|_| thread_rng().gen::<u8>()).collect();
+            let random_bytes: Vec<u8> = (0..num_bytes).map(|_| thread_rng().random::<u8>()()).collect();
             Nonce::new(base64::encode_config(&random_bytes, base64::URL_SAFE_NO_PAD))
         }
     }
