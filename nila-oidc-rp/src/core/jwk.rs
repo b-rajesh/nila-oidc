@@ -1,8 +1,10 @@
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use sha2::Digest;
 
+
+
 use crate::types::Base64UrlEncodedBytes;
-use crate::types::{helpers::deserialize_option_or_none, JsonCurveType};
+use crate::types::helpers::deserialize_option_or_none;
 use crate::{
     JsonWebKey, JsonWebKeyId, JsonWebKeyType, JsonWebKeyUse, JwsSigningAlgorithm,
     PrivateSigningKey, SignatureVerificationError, SigningError,
@@ -20,7 +22,7 @@ use super::{crypto, CoreJwsSigningAlgorithm};
 ///
 /// Public or symmetric key expressed as a JSON Web Key.
 ///
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CoreJsonWebKey {
     pub(crate) kty: CoreJsonWebKeyType,
     #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
@@ -180,9 +182,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pkcs1v15::<sha2::Sha256>(
                     self,
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha256>(),
                     message,
                     signature,
                 )
@@ -193,9 +194,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pkcs1v15::<sha2::Sha384>(
                     self,
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha384>(),
                     message,
                     signature,
                 )
@@ -206,9 +206,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pkcs1v15::<sha2::Sha512>(
                     self,
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha512>(),
                     message,
                     signature,
                 )
@@ -219,9 +218,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pss::<sha2::Sha256>(
                     self,
-                    rsa::PaddingScheme::new_pss::<sha2::Sha256>(),
                     message,
                     signature,
                 )
@@ -232,9 +230,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pss::<sha2::Sha384>(
                     self,
-                    rsa::PaddingScheme::new_pss::<sha2::Sha384>(),
                     message,
                     signature,
                 )
@@ -245,9 +242,8 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                     hasher.update(message);
                     &hasher.finalize()
                 };
-                crypto::verify_rsa_signature(
+                crypto::verify_rsa_signature_pss::<sha2::Sha512>(
                     self,
-                    rsa::PaddingScheme::new_pss::<sha2::Sha512>(),
                     message,
                     signature,
                 )
@@ -258,7 +254,7 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                         SignatureVerificationError::InvalidKey(
                             "Symmetric key `k` is missing".to_string(),
                         )
-                    })?,
+                    })?.as_ref(),
                 )
                 .map_err(|e| {
                     SignatureVerificationError::Other(format!("Could not create key: {}", e))
@@ -273,7 +269,7 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                         SignatureVerificationError::InvalidKey(
                             "Symmetric key `k` is missing".to_string(),
                         )
-                    })?,
+                    })?.as_ref(),
                 )
                 .map_err(|e| {
                     SignatureVerificationError::Other(format!("Could not create key: {}", e))
@@ -288,7 +284,7 @@ impl JsonWebKey<CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse> 
                         SignatureVerificationError::InvalidKey(
                             "Symmetric key `k` is missing".to_string(),
                         )
-                    })?,
+                    })?.as_ref(),
                 )
                 .map_err(|e| {
                     SignatureVerificationError::Other(format!("Could not create key: {}", e))
@@ -416,7 +412,6 @@ impl<T> RngClone for T where T: rand::RngCore + rand::CryptoRng + Clone {}
 ///
 pub struct CoreRsaPrivateSigningKey {
     key_pair: rsa::RsaPrivateKey,
-    rng: Box<dyn RngClone + Send + Sync>,
     kid: Option<JsonWebKeyId>,
 }
 impl CoreRsaPrivateSigningKey {
@@ -424,16 +419,15 @@ impl CoreRsaPrivateSigningKey {
     /// Converts an RSA private key (in PEM format) to a JWK representing its public key.
     ///
     pub fn from_pem(pem: &str, kid: Option<JsonWebKeyId>) -> Result<Self, String> {
-        Self::from_pem_internal(pem, Box::new(rand::rngs::OsRng), kid)
+        Self::from_pem_internal(pem, kid)
     }
 
     pub(crate) fn from_pem_internal(
         pem: &str,
-        rng: Box<dyn RngClone + Send + Sync>,
         kid: Option<JsonWebKeyId>,
     ) -> Result<Self, String> {
         let key_pair = rsa::RsaPrivateKey::from_pkcs1_pem(pem).map_err(|err| err.to_string())?;
-        Ok(Self { key_pair, rng, kid })
+        Ok(Self { key_pair, kid })
     }
 }
 impl
@@ -449,60 +443,24 @@ impl
         signature_alg: &CoreJwsSigningAlgorithm,
         msg: &[u8],
     ) -> Result<Vec<u8>, SigningError> {
-        let (padding_alg, hash) = match *signature_alg {
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256 => {
+        let hash = match *signature_alg {
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256
+            | CoreJwsSigningAlgorithm::RsaSsaPssSha256 => {
                 let mut hasher = sha2::Sha256::new();
                 hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha256>(),
-                    hash,
-                )
+                hasher.finalize().to_vec()
             }
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384 => {
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384
+            | CoreJwsSigningAlgorithm::RsaSsaPssSha384 => {
                 let mut hasher = sha2::Sha384::new();
                 hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha384>(),
-                    hash,
-                )
+                hasher.finalize().to_vec()
             }
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512 => {
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512
+            | CoreJwsSigningAlgorithm::RsaSsaPssSha512 => {
                 let mut hasher = sha2::Sha512::new();
                 hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pkcs1v15_sign::<sha2::Sha512>(),
-                    hash,
-                )
-            }
-            CoreJwsSigningAlgorithm::RsaSsaPssSha256 => {
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pss_with_salt::<sha2::Sha256>(hash.len()),
-                    hash,
-                )
-            }
-            CoreJwsSigningAlgorithm::RsaSsaPssSha384 => {
-                let mut hasher = sha2::Sha384::new();
-                hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pss_with_salt::<sha2::Sha384>(hash.len()),
-                    hash,
-                )
-            }
-            CoreJwsSigningAlgorithm::RsaSsaPssSha512 => {
-                let mut hasher = sha2::Sha512::new();
-                hasher.update(msg);
-                let hash = hasher.finalize().to_vec();
-                (
-                    rsa::PaddingScheme::new_pss_with_salt::<sha2::Sha512>(hash.len()),
-                    hash,
-                )
+                hasher.finalize().to_vec()
             }
             ref other => {
                 return Err(SigningError::UnsupportedAlg(
@@ -516,15 +474,59 @@ impl
             }
         };
 
-        let sig = self
-            .key_pair
-            .sign_blinded(&mut dyn_clone::clone_box(&self.rng), padding_alg, &hash)
-            .map_err(|_| SigningError::CryptoError)?;
+        let sig = match *signature_alg {
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256 => {
+                self.key_pair.sign(
+                    rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha256>(),
+                    &hash,
+                )
+            }
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384 => {
+                self.key_pair.sign(
+                    rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha384>(),
+                    &hash,
+                )
+            }
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512 => {
+                self.key_pair.sign(
+                    rsa::pkcs1v15::Pkcs1v15Sign::new::<sha2::Sha512>(),
+                    &hash,
+                )
+            }
+            CoreJwsSigningAlgorithm::RsaSsaPssSha256 => {
+                self.key_pair.sign(
+                    rsa::pss::Pss::new::<sha2::Sha256>(),
+                    &hash,
+                )
+            }
+            CoreJwsSigningAlgorithm::RsaSsaPssSha384 => {
+                self.key_pair.sign(
+                    rsa::pss::Pss::new::<sha2::Sha384>(),
+                    &hash,
+                )
+            }
+            CoreJwsSigningAlgorithm::RsaSsaPssSha512 => {
+                self.key_pair.sign(
+                    rsa::pss::Pss::new::<sha2::Sha512>(),
+                    &hash,
+                )
+            }
+            ref other => {
+                return Err(SigningError::UnsupportedAlg(
+                    serde_plain::to_string(other).unwrap_or_else(|err| {
+                        panic!(
+                            "signature alg {:?} failed to serialize to a string: {}",
+                            other, err
+                        )
+                    }),
+                ))
+            }
+        }.map_err(|_| SigningError::CryptoError)?;
         Ok(sig)
     }
 
     fn as_verification_key(&self) -> CoreJsonWebKey {
-        use rsa::PublicKeyParts;
+        use rsa::traits::PublicKeyParts;
         let public_key = self.key_pair.to_public_key();
         CoreJsonWebKey {
             kty: CoreJsonWebKeyType::RSA,
@@ -541,10 +543,17 @@ impl
     }
 }
 
+
+
+
+
+
+
+
 ///
 /// Type of JSON Web Key.
 ///
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CoreJsonWebKeyType {
     ///
@@ -570,31 +579,31 @@ impl JsonWebKeyType for CoreJsonWebKeyType {}
 ///
 /// Type of EC-Curve
 ///
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CoreJsonCurveType {
     ///
     /// P-256 Curve
     ///
     #[serde(rename = "P-256")]
-    P256,
+P256,
     ///
     /// P-384 Curve
     ///
     #[serde(rename = "P-384")]
-    P384,
+P384,
     ///
     /// P-521 Curve (currently not supported)
     ///
-    #[serde(rename = "P-521")]
-    P521,
+    
+P521,
 }
-impl JsonCurveType for CoreJsonWebKeyType {}
+
 
 ///
 /// Usage restriction for a JSON Web key.
 ///
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CoreJsonWebKeyUse {
     ///
@@ -612,15 +621,7 @@ pub enum CoreJsonWebKeyUse {
     ///
     Other(String),
 }
-impl CoreJsonWebKeyUse {
-    fn from_str(s: &str) -> Self {
-        match s {
-            "sig" => Self::Signature,
-            "enc" => Self::Encryption,
-            other => Self::Other(other.to_string()),
-        }
-    }
-}
+
 impl AsRef<str> for CoreJsonWebKeyUse {
     fn as_ref(&self) -> &str {
         match self {
@@ -638,11 +639,7 @@ impl JsonWebKeyUse for CoreJsonWebKeyUse {
         matches!(*self, CoreJsonWebKeyUse::Encryption)
     }
 }
-// FIXME: Once https://github.com/serde-rs/serde/issues/912 is resolved, use #[serde(other)] instead
-// of custom serializer/deserializers. Right now this isn't possible because serde(other) only
-// supports unit variants.
-deserialize_from_str!(CoreJsonWebKeyUse);
-serialize_as_str!(CoreJsonWebKeyUse);
+
 
 #[cfg(test)]
 mod tests {
@@ -650,6 +647,8 @@ mod tests {
     use rand::rngs::mock::StepRng;
     use rand::{CryptoRng, RngCore};
     use rsa::rand_core;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine; // Import trait for decode method
 
     use crate::jwt::tests::{TEST_EC_PUB_KEY_P256, TEST_EC_PUB_KEY_P384, TEST_RSA_PUB_KEY};
     use crate::types::Base64UrlEncodedBytes;
@@ -697,7 +696,7 @@ mod tests {
                 56, 188, 196, 5, 135, 165, 158, 102, 237, 31, 51, 137, 69, 119, 99, 92, 71, 10,
                 247, 92, 249, 44, 32, 209, 218, 67, 225, 191, 196, 25, 226, 34, 166, 240, 208, 187,
                 53, 140, 94, 56, 249, 203, 5, 10, 234, 254, 144, 72, 20, 241, 172, 26, 164, 156,
-                202, 158, 160, 202, 131,
+                202, 158, 160, 202,
             ]))
         );
         assert_eq!(key.e, Some(Base64UrlEncodedBytes::new(vec![1, 0, 1])));
@@ -740,8 +739,8 @@ mod tests {
     #[test]
     fn test_core_jwk_deserialization_symmetric() {
         let json = "{\
-            \"kty\":\"oct\",
-            \"alg\":\"A128KW\",
+            \"kty\":\"oct\",\
+            \"alg\":\"A128KW\",\
             \"k\":\"GawgguFyGrWKav7AX4VKUg\"
         }";
 
@@ -775,7 +774,7 @@ mod tests {
     fn test_core_jwk_deserialization_unrecognized() {
         // Unrecognized fields should be ignored during deserialization
         let json = "{\
-            \"kty\": \"oct\",
+            \"kty\": \"oct\",\
             \"unrecognized\": 1234
         }";
         let key: CoreJsonWebKey = serde_json::from_str(json).expect("deserialization failed");
@@ -790,8 +789,8 @@ mod tests {
         //   returns only the lexically last duplicate member name, as specified
         //   in Section 15.12 (The JSON Object) of ECMAScript 5.1 [ECMAScript]."
         let json = "{\
-            \"kty\":\"oct\",
-            \"k\":\"GawgguFyGrWKav7AX4VKUg\",
+            \"kty\":\"oct\",\
+            \"k\":\"GawgguFyGrWKav7AX4VKUg\",\
             \"k\":\"GawgguFyGrWKav7AX4VKVg\"
         }";
 
@@ -811,7 +810,7 @@ mod tests {
         signature_base64: &str,
     ) {
         let signature =
-            base64::decode_config(signature_base64, crate::core::base64_url_safe_no_pad())
+            URL_SAFE_NO_PAD.decode(signature_base64)
                 .expect("failed to base64url decode");
         key.verify_signature(alg, signing_input.as_bytes(), &signature)
             .expect("signature verification failed");
@@ -825,10 +824,10 @@ mod tests {
 
     #[test]
     fn test_ecdsa_verification() {
-        let key_p256: CoreJsonWebKey =
-            serde_json::from_str(TEST_EC_PUB_KEY_P256).expect("deserialization failed");
-        let key_p384: CoreJsonWebKey =
-            serde_json::from_str(TEST_EC_PUB_KEY_P384).expect("deserialization failed");
+        let key_p256:
+            CoreJsonWebKey = serde_json::from_str(TEST_EC_PUB_KEY_P256).expect("deserialization failed");
+        let key_p384:
+            CoreJsonWebKey = serde_json::from_str(TEST_EC_PUB_KEY_P384).expect("deserialization failed");
         let pkcs1_signing_input = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZX\
                                    hhbXBsZSJ9.\
                                    SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IH\
@@ -914,8 +913,8 @@ mod tests {
 
     #[test]
     fn test_rsa_pkcs1_verification() {
-        let key: CoreJsonWebKey =
-            serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
+        let key:
+            CoreJsonWebKey = serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
 
         // Source: https://tools.ietf.org/html/rfc7520#section-4.1
         let pkcs1_signing_input = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZX\
@@ -988,8 +987,8 @@ mod tests {
                      HdrNP5zw\",
             \"e\": \"AQAB\"
         }";
-        let enc_key: CoreJsonWebKey =
-            serde_json::from_str(enc_key_json).expect("deserialization failed");
+        let enc_key:
+            CoreJsonWebKey = serde_json::from_str(enc_key_json).expect("deserialization failed");
         match enc_key
             .verify_signature(
                 &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -1015,8 +1014,8 @@ mod tests {
                      HdrNP5zw\",
             \"e\": \"AQAB\"
         }";
-        let nousage_key: CoreJsonWebKey =
-            serde_json::from_str(nousage_key_json).expect("deserialization failed");
+        let nousage_key:
+            CoreJsonWebKey = serde_json::from_str(nousage_key_json).expect("deserialization failed");
         verify_signature(
             &nousage_key,
             &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -1032,11 +1031,10 @@ mod tests {
 
     #[test]
     fn test_rsa_pss_verification() {
-        let key: CoreJsonWebKey =
-            serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
+        let key:
+            CoreJsonWebKey = serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
         // Source: https://tools.ietf.org/html/rfc7520#section-4.2
-        let pss_signing_input =
-            "eyJhbGciOiJQUzM4NCIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZXhhbXBsZSJ9.\
+        let pss_signing_input = "eyJhbGciOiJQUzM4NCIsImtpZCI6ImJpbGJvLmJhZ2dpbnNAaG9iYml0b24uZXhhbXBsZSJ9.\
              SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IH\
              lvdXIgZG9vci4gWW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBk\
              b24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcm\
@@ -1089,7 +1087,8 @@ mod tests {
             \"k\": \"hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg\"
         }";
 
-        let key: CoreJsonWebKey = serde_json::from_str(key_json).expect("deserialization failed");
+        let key:
+            CoreJsonWebKey = serde_json::from_str(key_json).expect("deserialization failed");
         // Source: https://tools.ietf.org/html/rfc7520#section-4.4
         let signing_input = "eyJhbGciOiJIUzI1NiIsImtpZCI6IjAxOGMwYWU1LTRkOWItNDcxYi1iZmQ2LW\
                              VlZjMxNGJjNzAzNyJ9.\
@@ -1205,35 +1204,33 @@ mod tests {
     }
 
     // This is just a test key that isn't used for anything else.
-    const TEST_RSA_KEY: &str = "\
-                               -----BEGIN RSA PRIVATE KEY-----\n\
-                                MIIEowIBAAKCAQEAsRMj0YYjy7du6v1gWyKSTJx3YjBzZTG0XotRP0IaObw0k+68\n\
-                                30dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6ppBqlQNgjZJdloIqL9zOLBZrDm7G4\n\
-                                +qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm3J4fhjqCNaS2nKd7HVVXGBQQ+4+F\n\
-                                dVT+MyJXemw5maz2F/h324TQi6XoUPEwUddxBwLQFSOlzWnHYMc4/lcyZJ8MpTXC\n\
-                                MPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6R4dQITzKrjrEJ0u3w3eGkBBapoMV\n\
-                                FBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C4QIDAQABAoIBAHSS3izM+3nc7Bel\n\
-                                8S5uRxRKmcm5je6b11u6qiVUFkHWJmMRc6QmqmSThkCq+b4/vUAe1cYZ7+l02Exo\n\
-                                HOcrZiEULaDP6hUKGqyjKVv3wdlRtt8kFFxlC/HBufzAiNDuFVvzw0oquwnvMCXC\n\
-                                yQvtlK+/JY/PqvM32cSt+b4o9apySsHqAtdsoHHohK82jsQqIfCi1v8XYV/xRBJB\n\
-                                cQMCaA0Ls3tFpmJv3JdikyyQxio4kZ5tswghC63znCp1iL+qDq1wjjKzjick9MDb\n\
-                                Qzb95X09QQP201l1FPWN7Kbhj4ybg6PJGz/VHQcvILcBCoYIc0UY/OMSBt9VN9yD\n\
-                                wr1WlbECgYEA37difsTMcLmUEN57sicFe1q4lxH6eqnUBjmoKBflx4oMIIyRnfjF\n\
-                                Jwsu9yIiBkJfBCP85nl2tZdcV0wfZLf6amxB/KMtdfW6r8eoTDzE472OYxSIg1F5\n\
-                                dI4qn2nBI0Dou0g58xj+Kv0iLaym0pxtyJkSg/rxZGwKb9a+x5WAs50CgYEAyqC0\n\
-                                NcZs2BRIiT5kEOF6+MeUvarbKh1mangKHKcTdXRrvoJ+Z5izm7FifBixo/79MYpt\n\
-                                0VofW0IzYKtAI9KZDq2JcozEbZ+lt/ZPH5QEXO4T39QbDoAG8BbOmEP7l+6m+7QO\n\
-                                PiQ0WSNjDnwk3W7Zihgg31DH7hyxsxQCapKLcxUCgYAwERXPiPcoDSd8DGFlYK7z\n\
-                                1wUsKEe6DT0p7T9tBd1v5wA+ChXLbETn46Y+oQ3QbHg/yn+vAU/5KkFD3G4uVL0w\n\
-                                Gnx/DIxa+OYYmHxXjQL8r6ClNycxl9LRsS4FPFKsAWk/u///dFI/6E1spNjfDY8k\n\
-                                94ab5tHwsqn3Z5tsBHo3nQKBgFUmxbSXh2Qi2fy6+GhTqU7k6G/wXhvLsR9rBKzX\n\
-                                1YiVfTXZNu+oL0ptd/q4keZeIN7x0oaY/fZm0pp8PP8Q4HtXmBxIZb+/yG+Pld6q\n\
-                                YE8BSd7VDu3ABapdm0JHx3Iou4mpOBcLNeiDw3vx1bgsfkTXMPFHzE0XR+H+tak9\n\
-                                nlalAoGBALAmAF7WBGdOt43Rj8hPaKOM/ahj+6z3CNwVreToNsVBHoyNmiO8q7MC\n\
-                                +tRo4jgdrzk1pzs66OIHfbx5P1mXKPtgPZhvI5omAY8WqXEgeNqSL1Ksp6LZ2ql/\n\
-                                ouZns5xwKc9+aRL+GWoAGNzwzcjE8cP52sBy/r0rYXTs/sZo5kgV\n\
-                                -----END RSA PRIVATE KEY-----\
-                                ";
+    const TEST_RSA_KEY: &str = r#"-----BEGIN RSA PRIVATE KEY-----
+                                MIIEowIBAAKCAQEAsRMj0YYjy7du6v1gWyKSTJx3YjBzZTG0XotRP0IaObw0k+68
+                                30dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6ppBqlQNgjZJdloIqL9zOLBZrDm7G4
+                                +qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm3J4fhjqCNaS2nKd7HVVXGBQQ+4+F
+                                dVT+MyJXemw5maz2F/h324TQi6XoUPEwUddxBwLQFSOlzWnHYMc4/lcyZJ8MpTXC
+                                MPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6R4dQITzKrjrEJ0u3w3eGkBBapoMV
+                                FBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C4QIDAQABAoIBAHSS3izM+3nc7Bel
+                                8S5uRxRKmcm5je6b11u6qiVUFkHWJmMRc6QmqmSThkCq+b4/vUAe1cYZ7+l02Exo
+                                HOcrZiEULaDP6hUKGqyjKVv3wdlRtt8kFFxlC/HBufzAiNDuFVvzw0oquwnvMCXC
+                                yQvtlK+/JY/PqvM32cSt+b4o9apySsHqAtdsoHHohK82jsQqIfCi1v8XYV/xRBJB
+                                cQMCaA0Ls3tFpmJv3JdikyyQxio4kZ5tswghC63znCp1iL+qDq1wjjKzjick9MDb
+                                Qzb95X09QQP201l1FPWN7Kbhj4ybg6PJGz/VHQcvILcBCoYIc0UY/OMSBt9VN9yD
+                                wr1WlbECgYEA37difsTMcLmUEN57sicFe1q4lxH6eqnUBjmoKBflx4oMIIyRnfjF
+                                Jwsu9yIiBkJfBCP85nl2tZdcV0wfZLf6amxB/KMtdfW6r8eoTDzE472OYxSIg1F5
+                                dI4qn2nBI0Dou0g58xj+Kv0iLaym0pxtyJkSg/rxZGwKb9a+x5WAs50CgYEAyqC0
+                                NcZs2BRIiT5kEOF6+MeUvarbKh1mangKHKcTdXRrvoJ+Z5izm7FifBixo/79MYpt
+                                0VofW0IzYKtAI9KZDq2JcozEbZ+lt/ZPH5QEXO4T39QbDoAG8BbOmEP7l+6m+7QO
+                                PiQ0WSNjDnwk3W7Zihgg31DH7hyxsxQCapKLcxUCgYAwERXPiPcoDSd8DGFlYK7z
+                                1wUsKEe6DT0p7T9tBd1v5wA+ChXLbETn46Y+oQ3QbHg/yn+vAU/5KkFD3G4uVL0w
+                                Gnx/DIxa+OYYmHxXjQL8r6ClNycxl9LRsS4FPFKsAWk/u///dFI/6E1spNjfDY8k
+                                94ab5tHwsqn3Z5tsBHo3nQKBgFUmxbSXh2Qi2fy6+GhTqU7k6G/wXhvLsR9rBKzX
+                                1YiVfTXZNu+oL0ptd/q4keZeIN7x0oaY/fZm0pp8PP8Q4HtXmBxIZb+/yG+Pld6q
+                                YE8BSd7VDu3ABapdm0JHx3Iou4mpOBcLNeiDw3vx1bgsfkTXMPFHzE0XR+H+tak9
+                                nlalAoGBALAmAF7WBGdOt43Rj8hPaKOM/ahj+6z3CNwVreToNsVBHoyNmiO8q7MC
+                                +tRo4jgdrzk1pzs66OIHfbx5P1mXKPtgPZhvI5omAY8WqXEgeNqSL1Ksp6LZ2ql/
+                                ouZns5xwKc9+aRL+GWoAGNzwzcjE8cP52sBy/r0rYXTs/sZo5kgV
+                                -----END RSA PRIVATE KEY-----"#;
 
     fn expect_rsa_sig(
         private_key: &CoreRsaPrivateSigningKey,

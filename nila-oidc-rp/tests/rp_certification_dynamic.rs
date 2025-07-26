@@ -2,7 +2,7 @@
 extern crate env_logger;
 #[macro_use]
 extern crate log;
-extern crate openidconnect;
+extern crate nila_oidc_rp as openidconnect;
 #[macro_use]
 extern crate pretty_assertions;
 extern crate url;

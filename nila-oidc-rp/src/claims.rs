@@ -3,9 +3,9 @@ use std::marker::PhantomData;
 use std::str;
 
 use chrono::{DateTime, Utc};
-use serde::de::{Deserialize, DeserializeOwned, Deserializer, MapAccess, Visitor};
+use serde::de::{DeserializeOwned, Deserializer, MapAccess, Visitor};
 use serde::ser::SerializeMap;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::helpers::FlattenFilter;
 use crate::types::helpers::{split_language_tag_key, timestamp_to_utc, utc_to_seconds};

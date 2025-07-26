@@ -6,17 +6,17 @@ use std::cell::RefCell;
 use std::sync::Once;
 use std::time::Duration;
 
-use openidconnect::core::{
+use nila_oidc_rp::core::{
     CoreApplicationType, CoreClientRegistrationRequest, CoreClientRegistrationResponse,
     CoreProviderMetadata,
 };
-use openidconnect::{
+use nila_oidc_rp::{
     ClientContactEmail, ClientName, HttpRequest, HttpResponse, IssuerUrl, RedirectUrl,
 };
 
 pub const CERTIFICATION_BASE_URL: &str = "https://rp.certification.openid.net:8080";
-pub const RP_CONTACT_EMAIL: &str = "ramos@cs.stanford.edu";
-pub const RP_NAME: &str = "openidconnect-rs";
+pub const RP_CONTACT_EMAIL: &str = "a@nilaproxy.com";
+pub const RP_NAME: &str = "nila-oidc-rp";
 pub const RP_REDIRECT_URI: &str = "http://localhost:8080";
 
 static INIT_LOG: Once = Once::new();
@@ -74,7 +74,7 @@ pub fn init_log(test_id: &'static str) {
 
 pub fn http_client(
     request: HttpRequest,
-) -> Result<HttpResponse, openidconnect::reqwest::HttpClientError> {
+) -> Result<HttpResponse, nila-oidc-rp::reqwest::HttpClientError> {
     retry::retry(
         (0..5).map(|i| {
             if i != 0 {
@@ -82,11 +82,11 @@ pub fn http_client(
             }
             Duration::from_millis(500)
         }),
-        || openidconnect::reqwest::http_client(request.clone()),
+        || nila-oidc-rp::reqwest::http_client(request.clone()),
     )
     .map_err(|err| match err {
         retry::Error::Operation { error, .. } => error,
-        retry::Error::Internal(msg) => openidconnect::reqwest::Error::Other(msg),
+        retry::Error::Internal(msg) => nila_oidc_rp::reqwest::Error::Other(msg),
     })
 }
 

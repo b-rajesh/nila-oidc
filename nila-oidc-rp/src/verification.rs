@@ -876,7 +876,7 @@ where
     expected_subject: Option<SubjectIdentifier>,
     _phantom: PhantomData<JE>,
 }
-impl<'a, JE, JS, JT, JU, K> UserInfoVerifier<'a, JE, JS, JT, JU, K>
+impl<JE, JS, JT, JU, K> UserInfoVerifier<'_, JE, JS, JT, JU, K>
 where
     JE: JweContentEncryptionAlgorithm<JT>,
     JS: JwsSigningAlgorithm<JT>,
@@ -958,6 +958,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use oauth2::{ClientId, ClientSecret};
+    use serde::{Deserialize, Serialize};
 
     use super::{
         AudiencesClaim, ClaimsVerificationError, IssuerClaim, JsonWebTokenHeader,
@@ -1406,17 +1407,18 @@ mod tests {
         match CoreJwtClaimsVerifier::new(
             client_id.clone(),
             issuer.clone(),
-            CoreJsonWebKeySet::new(vec![CoreJsonWebKey {
-                kty: CoreJsonWebKeyType::Symmetric,
-                use_: Some(CoreJsonWebKeyUse::Signature),
-                kid: Some(kid.clone()),
+                        CoreJsonWebKeySet::new(vec![CoreJsonWebKey {
+                kty: "oct".to_string(),
+                use_: Some("sig".to_string()),
+                kid: Some(kid.to_string()),
                 n: None,
                 e: None,
-                k: Some(Base64UrlEncodedBytes::new(vec![1, 2, 3, 4])),
+                k: Some(crate::types::Base64UrlEncodedBytes::new(vec![1, 2, 3, 4])),
                 crv: None,
                 x: None,
                 y: None,
                 d: None,
+                key_data: vec![1, 2, 3, 4],
             }]),
         )
         .verified_claims(valid_rs256_jwt.clone())
@@ -1432,12 +1434,13 @@ mod tests {
             client_id.clone(),
             issuer.clone(),
             CoreJsonWebKeySet::new(vec![CoreJsonWebKey {
-                kty: CoreJsonWebKeyType::RSA,
-                use_: Some(CoreJsonWebKeyUse::Encryption),
-                kid: Some(kid),
-                n: Some(n),
-                e: Some(e),
+                kty: "RSA".to_string(),
+                use_: Some("enc".to_string()),
+                kid: Some(kid.to_string()),
+                n: Some(String::from_utf8(n.to_value().clone()).unwrap()),
+                e: Some(String::from_utf8(e.to_value().clone()).unwrap()),
                 k: None,
+                key_data: vec![1, 2, 3, 4],
                 crv: None,
                 x: None,
                 y: None,
@@ -1863,18 +1866,22 @@ mod tests {
         let nonce = Nonce::new("the_nonce".to_string());
         let rsa_priv_key = CoreRsaPrivateSigningKey::from_pem(TEST_RSA_PRIV_KEY, None).unwrap();
 
-        let id_token = CoreIdToken::new(
+        let id_token = CoreIdToken::new::<
+            crate::core::jwk::CoreJsonWebKeyUse,
+            crate::core::jwk::CoreJsonWebKey,
+            crate::core::jwk::CoreRsaPrivateSigningKey,
+        >(
             CoreIdTokenClaims::new(
                 issuer.clone(),
                 vec![Audience::new((*client_id).clone())],
-                Utc.timestamp(1544932149, 0),
-                Utc.timestamp(1544928549, 0),
+                Utc.timestamp_opt(1544932149, 0).unwrap(),
+                Utc.timestamp_opt(1544928549, 0).unwrap(),
                 StandardClaims::new(SubjectIdentifier::new("subject".to_string())),
                 Default::default(),
             )
             .set_nonce(Some(nonce.clone()))
             .set_auth_context_ref(Some(AuthenticationContextClass::new("the_acr".to_string())))
-            .set_auth_time(Some(Utc.timestamp(1544928548, 0))),
+            .set_auth_time(Some(Utc.timestamp_opt(1544928548, 0).unwrap())),
             &rsa_priv_key,
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             Some(&AccessToken::new("the_access_token".to_string())),
@@ -2078,7 +2085,7 @@ mod tests {
                 phone_number: None,
                 phone_number_verified: None,
                 address: None,
-                updated_at: Some(Utc.timestamp(1544928548, 0)),
+                updated_at: Some(Utc.timestamp_opt(1544928548, 0).unwrap()),
             },
             Default::default(),
         );
@@ -2089,7 +2096,11 @@ mod tests {
         );
 
         let rsa_priv_key = CoreRsaPrivateSigningKey::from_pem(TEST_RSA_PRIV_KEY, None).unwrap();
-        let claims_jwt = CoreUserInfoJsonWebToken::new(
+        let claims_jwt = CoreUserInfoJsonWebToken::new::<
+            crate::core::jwk::CoreJsonWebKeyUse,
+            crate::core::jwk::CoreJsonWebKey,
+            crate::core::jwk::CoreRsaPrivateSigningKey,
+        >(
             claims,
             &rsa_priv_key,
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,

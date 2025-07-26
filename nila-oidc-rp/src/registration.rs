@@ -7,9 +7,9 @@ use chrono::{DateTime, Utc};
 use http::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE};
 use http::method::Method;
 use http::status::StatusCode;
-use serde::de::{Deserialize, DeserializeOwned, Deserializer, MapAccess, Visitor};
+use serde::de::{DeserializeOwned, Deserializer, MapAccess, Visitor};
 use serde::ser::SerializeMap;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
 use super::http_utils::{auth_bearer, check_content_type, MIME_TYPE_JSON};
@@ -516,10 +516,18 @@ where
         let mut headers = HeaderMap::new();
         headers.append(ACCEPT, HeaderValue::from_static(MIME_TYPE_JSON));
         headers.append(CONTENT_TYPE, HeaderValue::from_static(MIME_TYPE_JSON));
-        if let Some((header, value)) = auth_header_opt {
-            headers.append(header, value);
+        if let Some((header_name, value)) = auth_header_opt {
+            headers.append(header_name, value);
         }
 
+        let mut request = http::Request::builder()
+            .uri(registration_endpoint.url().clone().to_string())
+            .method(Method::POST);
+        for (header_name, header_value) in &headers {
+            request = request.header(header_name, header_value);
+        }
+
+        let _http_request = request.body(request_json.clone()).unwrap();
         Ok(HttpRequest {
             url: registration_endpoint.url().clone(),
             method: Method::POST,
@@ -549,7 +557,7 @@ where
         {
             return Err(ClientRegistrationError::Response(
                 http_response.status_code,
-                http_response.body,
+                http_response.body.clone(),
                 "unexpected HTTP status code".to_string(),
             ));
         }
@@ -562,7 +570,7 @@ where
             )
         })?;
 
-        let response_body = String::from_utf8(http_response.body).map_err(|parse_error| {
+        let response_body = String::from_utf8(http_response.body.clone()).map_err(|parse_error| {
             ClientRegistrationError::Other(format!(
                 "couldn't parse response as UTF-8: {}",
                 parse_error
@@ -1280,11 +1288,11 @@ mod tests {
         );
         assert_eq!(
             registration_response.client_id_issued_at().unwrap(),
-            Utc.timestamp(1523953306, 0)
+            Utc.timestamp_opt(1523953306, 0).unwrap()
         );
         assert_eq!(
             registration_response.client_secret_expires_at().unwrap(),
-            Utc.timestamp(1526545306, 0)
+            Utc.timestamp_opt(1526545306, 0).unwrap()
         );
         assert_eq!(
             *registration_response.redirect_uris(),

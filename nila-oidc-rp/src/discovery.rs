@@ -7,7 +7,7 @@ use http::method::Method;
 use http::status::StatusCode;
 use oauth2::{AuthUrl, Scope, TokenUrl};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, skip_serializing_none, VecSkipError};
 use thiserror::Error;
 

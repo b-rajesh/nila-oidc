@@ -7,6 +7,7 @@ use http::header::{HeaderValue, ACCEPT, CONTENT_TYPE};
 use http::method::Method;
 use http::status::StatusCode;
 use oauth2::AccessToken;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
@@ -42,7 +43,7 @@ where
     pub(super) require_signed_response: bool,
     pub(super) signed_response_verifier: UserInfoVerifier<'static, JE, JS, JT, JU, K>,
 }
-impl<'a, JE, JS, JT, JU, K> UserInfoRequest<'a, JE, JS, JT, JU, K>
+impl<JE, JS, JT, JU, K> UserInfoRequest<'_, JE, JS, JT, JU, K>
 where
     JE: JweContentEncryptionAlgorithm<JT>,
     JS: JwsSigningAlgorithm<JT>,
@@ -353,7 +354,7 @@ where
         self.audiences.as_ref()
     }
 }
-impl<'a, AC, GC> AudiencesClaim for &'a UserInfoClaimsImpl<AC, GC>
+impl<AC, GC> AudiencesClaim for &UserInfoClaimsImpl<AC, GC>
 where
     AC: AdditionalClaims,
     GC: GenderClaim,
@@ -372,7 +373,7 @@ where
         self.issuer.as_ref()
     }
 }
-impl<'a, AC, GC> IssuerClaim for &'a UserInfoClaimsImpl<AC, GC>
+impl<AC, GC> IssuerClaim for &UserInfoClaimsImpl<AC, GC>
 where
     AC: AdditionalClaims,
     GC: GenderClaim,
@@ -484,6 +485,7 @@ where
 mod tests {
     use crate::core::CoreGenderClaim;
     use crate::{AdditionalClaims, UserInfoClaims};
+    use serde::{Deserialize, Serialize};
 
     use std::collections::HashMap;
 

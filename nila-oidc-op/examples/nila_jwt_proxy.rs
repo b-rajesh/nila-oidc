@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use nila_oidc::prelude::*;
+use nila_oidc_op::prelude::*;
 use pingora_core::server::Server;
 use pingora_http::ResponseHeader;
 use pingora_core::upstreams::peer::HttpPeer;

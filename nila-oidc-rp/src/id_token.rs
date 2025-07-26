@@ -1,10 +1,10 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter, Result as FormatterResult};
 use std::marker::PhantomData;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use oauth2::ClientId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::helpers::FilteredFlatten;
@@ -162,7 +162,7 @@ where
         }
     }
 }
-impl<AC, GC, JE, JS, JT> ToString for IdToken<AC, GC, JE, JS, JT>
+impl<AC, GC, JE, JS, JT> Display for IdToken<AC, GC, JE, JS, JT>
 where
     AC: AdditionalClaims,
     GC: GenderClaim,
@@ -170,15 +170,37 @@ where
     JS: JwsSigningAlgorithm<JT>,
     JT: JsonWebKeyType,
 {
-    fn to_string(&self) -> String {
-        serde_json::to_value(&self)
-            // This should never arise, since we're just asking serde_json to serialize the
-            // signing input concatenated with the signature, both of which are precomputed.
-            .expect("ID token serialization failed")
-            .as_str()
-            // This should also never arise, since our IdToken serializer always calls serialize_str
-            .expect("ID token serializer did not produce a str")
-            .to_owned()
+    fn fmt(&self, f: &mut Formatter) -> FormatterResult {
+        // We intentionally don't implement `Display` to avoid accidentally printing credentials
+        // in logs. Use `to_string()` or `serde_json::to_string()` instead.
+        write!(f, "[ID Token]")
+    }
+}
+
+impl<AC, GC, JE, JS, JT> IdToken<AC, GC, JE, JS, JT>
+where
+    AC: AdditionalClaims,
+    GC: GenderClaim,
+    JE: JweContentEncryptionAlgorithm<JT>,
+    JS: JwsSigningAlgorithm<JT>,
+    JT: JsonWebKeyType,
+{
+    /// Serializes this ID token to a JSON string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
+    pub fn to_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Serializes this ID token to a JSON value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
+    pub fn to_value(&self) -> Result<Value, serde_json::Error> {
+        serde_json::to_value(self)
     }
 }
 
@@ -344,7 +366,7 @@ where
         Some(IdTokenClaims::audiences(self))
     }
 }
-impl<'a, AC, GC> AudiencesClaim for &'a IdTokenClaims<AC, GC>
+impl<AC, GC> AudiencesClaim for &IdTokenClaims<AC, GC>
 where
     AC: AdditionalClaims,
     GC: GenderClaim,
@@ -362,7 +384,7 @@ where
         Some(IdTokenClaims::issuer(self))
     }
 }
-impl<'a, AC, GC> IssuerClaim for &'a IdTokenClaims<AC, GC>
+impl<AC, GC> IssuerClaim for &IdTokenClaims<AC, GC>
 where
     AC: AdditionalClaims,
     GC: GenderClaim,
@@ -444,6 +466,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use oauth2::basic::BasicTokenType;
     use oauth2::{ClientId, TokenResponse};
+    use serde::{Deserialize, Serialize};
     use url::Url;
 
     use crate::claims::{AdditionalClaims, EmptyAdditionalClaims, StandardClaims};
@@ -483,15 +506,15 @@ mod tests {
             *claims.audiences(),
             vec![Audience::new("s6BhdRkqt3".to_string())]
         );
-        assert_eq!(claims.expiration(), Utc.timestamp(1311281970, 0));
-        assert_eq!(claims.issue_time(), Utc.timestamp(1311280970, 0));
+        assert_eq!(claims.expiration(), Utc.timestamp_opt(1311281970, 0).unwrap());
+        assert_eq!(claims.issue_time(), Utc.timestamp_opt(1311280970, 0).unwrap());
         assert_eq!(
             *claims.subject(),
             SubjectIdentifier::new("24400320".to_string())
         );
 
         // test `ToString` implementation
-        assert_eq!(&id_token.to_string(), ID_TOKEN);
+        assert_eq!(id_token.to_string().unwrap(), ID_TOKEN);
 
         // test `serde::Serialize` implementation too
         let de = serde_json::to_string(&id_token).expect("failed to deserializee id token");
@@ -524,8 +547,8 @@ mod tests {
             *claims.audiences(),
             vec![Audience::new("s6BhdRkqt3".to_string())]
         );
-        assert_eq!(claims.expiration(), Utc.timestamp(1311281970, 0));
-        assert_eq!(claims.issue_time(), Utc.timestamp(1311280970, 0));
+        assert_eq!(claims.expiration(), Utc.timestamp_opt(1311281970, 0).unwrap());
+        assert_eq!(claims.issue_time(), Utc.timestamp_opt(1311280970, 0).unwrap());
         assert_eq!(
             *claims.subject(),
             SubjectIdentifier::new("24400320".to_string())
@@ -542,8 +565,8 @@ mod tests {
         let new_claims = CoreIdTokenClaims::new(
             IssuerUrl::new("https://server.example.com".to_string()).unwrap(),
             vec![Audience::new("s6BhdRkqt3".to_string())],
-            Utc.timestamp(1311281970, 0),
-            Utc.timestamp(1311280970, 0),
+            Utc.timestamp_opt(1311281970, 0).unwrap(),
+            Utc.timestamp_opt(1311280970, 0).unwrap(),
             StandardClaims::new(SubjectIdentifier::new("24400320".to_string())),
             EmptyAdditionalClaims {},
         );
@@ -666,8 +689,8 @@ mod tests {
         let new_claims = CoreIdTokenClaims::new(
             IssuerUrl::new("https://server.example.com".to_string()).unwrap(),
             vec![Audience::new("s6BhdRkqt3".to_string())],
-            Utc.timestamp(1311281970, 0),
-            Utc.timestamp(1311280970, 0),
+            Utc.timestamp_opt(1311281970, 0).unwrap(),
+            Utc.timestamp_opt(1311280970, 0).unwrap(),
             StandardClaims {
                 sub: SubjectIdentifier::new("24400320".to_string()),
                 name: Some(
@@ -794,11 +817,11 @@ mod tests {
                     postal_code: Some(AddressPostalCode::new("90210".to_string())),
                     country: Some(AddressCountry::new("US".to_string())),
                 }),
-                updated_at: Some(Utc.timestamp(1311283970, 0)),
+                updated_at: Some(Utc.timestamp_opt(1311283970, 0).unwrap()),
             },
             EmptyAdditionalClaims {},
         )
-        .set_auth_time(Some(Utc.timestamp(1311282970, 0)))
+        .set_auth_time(Some(Utc.timestamp_opt(1311282970, 0).unwrap()))
         .set_nonce(Some(Nonce::new("Zm9vYmFy".to_string())))
         .set_auth_context_ref(Some(AuthenticationContextClass::new(
             "urn:mace:incommon:iap:silver".to_string(),
@@ -884,7 +907,7 @@ mod tests {
             }",
         )
         .expect("failed to deserialize");
-        assert_eq!(claims.updated_at(), Some(Utc.timestamp(1640139037, 0)));
+        assert_eq!(claims.updated_at(), Some(Utc.timestamp_opt(1640139037, 0).unwrap()));
     }
 
     #[test]

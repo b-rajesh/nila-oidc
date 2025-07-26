@@ -1,12 +1,12 @@
 [package]
 name = "nila-oidc-rp"
+description = "A friendly OpenID Connect (OIDC) relying party (client)."
 version.workspace = true
-edition.workspace = true
+edition = "2021"
+rust-version.workspace = true
 authors.workspace = true
 license-file = "LICENSE"
-description = "A friendly OpenID Connect (OIDC) relying party (client)."
 repository.workspace = true
-edition = "2024"
 readme = "README.md"
 
 [package.metadata.docs.rs]
@@ -27,34 +27,40 @@ accept-string-booleans = []
 nightly = []
 
 [dependencies]
-rand = { version = "0.9", default-features = false, features = ["std", "thread_rng"] }
-base64.workspace = true
-chrono = { workspace = true, default-features = false, features = ["clock", "std"] }
+rand = { version = "0.8.5", default-features = false, features = ["std_rng"] }
+base64 = "0.21.7"
+chrono = { workspace = true, default-features = false, features = [
+    "clock",
+    "std",
+] }
+const-oid = "0.9.6"
 thiserror.workspace = true
-http = "0.2"
-itertools = "0.10"
-log.workspace = true
-oauth2 = { version = "4.2.2", default-features = false }
+http = "0.2.12"
+itertools = "0.12.1"
+log = "0.4.21"
+oauth2 = { version = "4.4.2", default-features = false }
 hmac = "0.12.1"
-rsa = { workspace = true, features = ["pkcs1v15"] }
-sha2 = { workspace = true, features = ["oid"] }
-p256 = "0.11.1"
-p384 = "0.11.2"
-dyn-clone = "1.0.10"
-serde.workspace = true
-serde_derive = "1.0"
+rsa = "0.9.6"
+sha2 = { version = "0.10.8", features = ["oid"] }
+p256 = "0.13.2"
+p384 = "0.13.0"
+dyn-clone = "1.0.17"
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_path_to_error = "0.1"
-serde_plain = "1.0"
-serde_with = "1.13"
-serde-value = "0.7"
+serde_path_to_error = "0.1.16"
+serde_plain = "1.0.2"
+serde_with = "3.7.0"
+serde-value = "0.7.0"
 url = { workspace = true, features = ["serde"] }
-subtle = "2.4"
+subtle = "2.5.0"
 
 [dev-dependencies]
-color-backtrace = "0.5"
-env_logger = "0.9"
-pretty_assertions = "1.0"
-reqwest = { workspace = true, features = ["blocking", "rustls-tls"], default-features = false }
-retry = "1.0"
-anyhow = "1.0"
+color-backtrace = "0.7.0"
+env_logger = "0.11.3"
+pretty_assertions = "1.4.0"
+reqwest = { workspace = true, features = [
+    "blocking",
+    "rustls-tls",
+], default-features = false }
+retry = "2.0.0"
+anyhow = "1.0.86"

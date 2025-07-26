@@ -23,14 +23,14 @@ use std::process::exit;
 
 use url::Url;
 
-use openidconnect::core::{
+use nila_oidc_rp::core::{
     CoreClient, CoreGenderClaim, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata,
     CoreResponseType,
 };
 
-use openidconnect::reqwest::http_client;
-use openidconnect::{AdditionalClaims, UserInfoClaims};
-use openidconnect::{
+use nila_oidc_rp::reqwest::http_client;
+use nila_oidc_rp::{AdditionalClaims, UserInfoClaims};
+use nila_oidc_rp::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
     OAuth2TokenResponse, RedirectUrl, Scope,
 };

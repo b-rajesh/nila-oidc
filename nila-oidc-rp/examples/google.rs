@@ -22,14 +22,14 @@ use std::process::exit;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use openidconnect::core::{
+use nila_oidc_rp::core::{
     CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType,
     CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse,
     CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
     CoreResponseMode, CoreResponseType, CoreRevocableToken, CoreSubjectIdentifierType,
 };
-use openidconnect::reqwest::http_client;
-use openidconnect::{
+use nila_oidc_rp::reqwest::http_client;
+use nila_oidc_rp::{
     AdditionalProviderMetadata, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret,
     CsrfToken, IssuerUrl, Nonce, OAuth2TokenResponse, ProviderMetadata, RedirectUrl, RevocationUrl,
     Scope,

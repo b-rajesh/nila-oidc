@@ -29,14 +29,16 @@ use crate::{
 
 use super::AuthenticationFlow;
 
-pub use self::jwk::{
-    CoreHmacKey, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreRsaPrivateSigningKey,
-};
+// Re-export core JWK types
+pub use self::jwk::{CoreJsonWebKey, CoreJsonCurveType, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreHmacKey, CoreRsaPrivateSigningKey};
 
 mod crypto;
 
 // Private purely for organizational reasons; exported publicly above.
-mod jwk;
+///
+/// JSON Web Key ([RFC 7517](https://tools.ietf.org/html/rfc7517)) types.
+///
+pub mod jwk;
 
 ///
 /// OpenID Connect Core token introspection response.
@@ -1316,10 +1318,6 @@ impl AsRef<str> for CoreSubjectIdentifierType {
     }
 }
 impl SubjectIdentifierType for CoreSubjectIdentifierType {}
-
-pub(crate) fn base64_url_safe_no_pad() -> base64::Config {
-    base64::URL_SAFE_NO_PAD.decode_allow_trailing_bits(true)
-}
 
 #[cfg(test)]
 mod tests;

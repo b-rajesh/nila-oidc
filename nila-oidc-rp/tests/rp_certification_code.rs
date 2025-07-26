@@ -3,7 +3,7 @@ extern crate env_logger;
 extern crate http;
 #[macro_use]
 extern crate log;
-extern crate openidconnect;
+extern crate nila_oidc_rp as openidconnect;
 #[macro_use]
 extern crate pretty_assertions;
 extern crate reqwest_ as reqwest;
@@ -16,14 +16,14 @@ use http::method::Method;
 use reqwest::{blocking::Client, redirect::Policy};
 use url::Url;
 
-use openidconnect::core::{
+use nila-oidc-rp::core::{
     CoreClient, CoreClientAuthMethod, CoreClientRegistrationRequest,
     CoreClientRegistrationResponse, CoreIdToken, CoreIdTokenClaims, CoreIdTokenVerifier,
     CoreJsonWebKeySet, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseType,
     CoreUserInfoClaims,
 };
-use openidconnect::Nonce;
-use openidconnect::{
+use nila-oidc-rp::Nonce;
+use nila-oidc-rp::{
     AccessToken, AuthType, AuthenticationFlow, AuthorizationCode, ClaimsVerificationError,
     CsrfToken, OAuth2TokenResponse, RequestTokenError, Scope, SignatureVerificationError,
     UserInfoError,
@@ -232,7 +232,7 @@ impl TestState {
 
     pub fn user_info_claims_failure(
         &self,
-    ) -> UserInfoError<openidconnect::reqwest::HttpClientError> {
+    ) -> UserInfoError<nila-oidc-rp::reqwest::HttpClientError> {
         let user_info_result: Result<CoreUserInfoClaims, _> = self
             .client
             .user_info(

@@ -10,7 +10,6 @@ use http::header::{HeaderValue, ACCEPT};
 use http::method::Method;
 use http::status::StatusCode;
 use oauth2::helpers::deserialize_space_delimited_vec;
-use rand::{thread_rng, Rng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, VecSkipError};
@@ -282,14 +281,6 @@ pub trait JsonWebKeyType:
 }
 
 ///
-/// Curve type (e.g., P256).
-///
-pub trait JsonCurveType:
-    Clone + Debug + DeserializeOwned + PartialEq + Serialize + 'static
-{
-}
-
-///
 /// Allowed key usage.
 ///
 pub trait JsonWebKeyUse: Debug + DeserializeOwned + Serialize + 'static {
@@ -429,8 +420,10 @@ new_type![
         {
             alg.hash_bytes(access_token.secret().as_bytes())
                 .map(|hash| {
+                    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                    use base64::Engine;
                     Self::new(
-                        base64::encode_config(&hash[0..hash.len() / 2], base64::URL_SAFE_NO_PAD)
+                        URL_SAFE_NO_PAD.encode(&hash[0..hash.len() / 2])
                     )
                 })
                 .map_err(SigningError::UnsupportedAlg)
@@ -499,8 +492,10 @@ new_type![
         {
             alg.hash_bytes(code.secret().as_bytes())
                 .map(|hash| {
+                    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                    use base64::Engine;
                     Self::new(
-                        base64::encode_config(&hash[0..hash.len() / 2], base64::URL_SAFE_NO_PAD)
+                        URL_SAFE_NO_PAD.encode(&hash[0..hash.len() / 2])
                     )
                 })
                 .map_err(SigningError::UnsupportedAlg)
@@ -508,13 +503,27 @@ new_type![
     }
 ];
 
-new_type![
-    #[derive(Deserialize, Eq, Hash, Serialize)]
-    pub(crate) Base64UrlEncodedBytes(
-        #[serde(with = "serde_base64url_byte_array")]
-        Vec<u8>
-    )
-];
+/// A base64url-encoded byte array.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct Base64UrlEncodedBytes(
+    #[serde(with = "serde_base64url_byte_array")]
+    Vec<u8>
+);
+
+impl Base64UrlEncodedBytes {
+    /// Creates a new Base64UrlEncodedBytes from the given bytes.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+    
+    
+}
+
+impl AsRef<[u8]> for Base64UrlEncodedBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 new_type![
     ///
@@ -912,8 +921,10 @@ new_secret_type![
         /// * `num_bytes` - Number of random bytes to generate, prior to base64-encoding.
         ///
         pub fn new_random_len(num_bytes: u32) -> Self {
-            let random_bytes: Vec<u8> = (0..num_bytes).map(|_| thread_rng().random::<u8>()()).collect();
-            Nonce::new(base64::encode_config(&random_bytes, base64::URL_SAFE_NO_PAD))
+            let random_bytes: Vec<u8> = (0..num_bytes).map(|_| rand::random::<u8>()).collect();
+            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            use base64::Engine;
+            Nonce::new(URL_SAFE_NO_PAD.encode(&random_bytes))
         }
     }
 ];
@@ -1084,14 +1095,38 @@ new_url_type![
     ToSUrl
 ];
 
+
+
+
+
 // FIXME: Add tests
 pub(crate) mod helpers {
     use chrono::{DateTime, TimeZone, Utc};
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Deserializer, Serializer};
     use serde_json::{from_value, Value};
+    
 
     use super::{LanguageTag, Timestamp};
+    
+    
+
+    
+
+    pub fn deserialize_option_or_none<'de, T, D>(
+        deserializer: D,
+    ) -> Result<Option<T>, D::Error>
+    where
+        T: DeserializeOwned,
+        D: Deserializer<'de>,
+    {
+        let value: Value = Deserialize::deserialize(deserializer)?;
+        if value.is_null() {
+            Ok(None)
+        } else {
+            from_value(value).map(Some).map_err(serde::de::Error::custom)
+        }
+    }
 
     pub fn deserialize_string_or_vec<'de, T, D>(deserializer: D) -> Result<Vec<T>, D::Error>
     where
@@ -1129,30 +1164,6 @@ pub(crate) mod helpers {
         }
     }
 
-    // Attempt to deserialize the value; if the value is null or an error occurs, return None.
-    // This is useful when deserializing fields that may mean different things in different
-    // contexts, and where we would rather ignore the result than fail to deserialize. For example,
-    // the fields in JWKs are not well defined; extensions could theoretically define their own
-    // field names that overload field names used by other JWK types.
-    pub fn deserialize_option_or_none<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
-    where
-        T: DeserializeOwned,
-        D: Deserializer<'de>,
-    {
-        let value: Value = Deserialize::deserialize(deserializer)?;
-        match from_value::<Option<T>>(value) {
-            Ok(val) => Ok(val),
-            Err(_) => Ok(None),
-        }
-    }
-
-    ///
-    /// Serde space-delimited string serializer for an `Option<Vec<String>>`.
-    ///
-    /// This function serializes a string vector into a single space-delimited string.
-    /// If `string_vec_opt` is `None`, the function serializes it as `None` (e.g., `null`
-    /// in the case of JSON serialization).
-    ///
     pub fn serialize_space_delimited_vec<T, S>(vec: &[T], serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<str>,
@@ -1311,16 +1322,18 @@ pub(crate) mod helpers {
 mod serde_base64url_byte_array {
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serializer};
-    use serde_json::{from_value, Value};
+    
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let value: Value = Deserialize::deserialize(deserializer)?;
-        let base64_encoded: String = from_value(value).map_err(D::Error::custom)?;
+        let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
+        let base64_encoded: String = serde_json::from_value(value).map_err(D::Error::custom)?;
 
-        base64::decode_config(&base64_encoded, crate::core::base64_url_safe_no_pad()).map_err(
+        URL_SAFE_NO_PAD.decode(&base64_encoded).map_err(
             |err| {
                 D::Error::custom(format!(
                     "invalid base64url encoding `{}`: {:?}",
@@ -1334,7 +1347,9 @@ mod serde_base64url_byte_array {
     where
         S: Serializer,
     {
-        let base64_encoded = base64::encode_config(v, base64::URL_SAFE_NO_PAD);
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let base64_encoded = URL_SAFE_NO_PAD.encode(v);
         serializer.serialize_str(&base64_encoded)
     }
 }

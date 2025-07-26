@@ -145,7 +145,7 @@ where
     }
 
     fn serialize(payload: &P) -> Result<String, serde_json::Error> {
-        serde_json::to_string(payload).map_err(Into::into)
+        serde_json::to_string(payload)
     }
 }
 
@@ -221,6 +221,7 @@ where
         K: JsonWebKey<JS, JT, JU>,
         SK: PrivateSigningKey<JS, JT, JU, K>,
     {
+        use base64::Engine;
         let header = JsonWebTokenHeader::<JE, _, _> {
             alg: JsonWebTokenAlgorithm::Signature(alg.clone(), PhantomData),
             crit: None,
@@ -232,11 +233,12 @@ where
 
         let header_json =
             serde_json::to_string(&header).map_err(JsonWebTokenError::SerializationError)?;
-        let header_base64 = base64::encode_config(&header_json, base64::URL_SAFE_NO_PAD);
+        let header_base64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_json);
 
         let serialized_payload =
             S::serialize(&payload).map_err(JsonWebTokenError::SerializationError)?;
-        let payload_base64 = base64::encode_config(&serialized_payload, base64::URL_SAFE_NO_PAD);
+        let payload_base64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serialized_payload);
 
         let signing_input = format!("{}.{}", header_base64, payload_base64);
 
@@ -337,6 +339,7 @@ where
     where
         D: Deserializer<'de>,
     {
+        use base64::Engine;
         struct JsonWebTokenVisitor<
             JE: JweContentEncryptionAlgorithm<JT>,
             JS: JwsSigningAlgorithm<JT>,
@@ -350,7 +353,7 @@ where
             PhantomData<P>,
             PhantomData<S>,
         );
-        impl<'de, JE, JS, JT, P, S> Visitor<'de> for JsonWebTokenVisitor<JE, JS, JT, P, S>
+        impl<JE, JS, JT, P, S> Visitor<'_> for JsonWebTokenVisitor<JE, JS, JT, P, S>
         where
             JE: JweContentEncryptionAlgorithm<JT>,
             JS: JwsSigningAlgorithm<JT>,
@@ -386,30 +389,30 @@ where
                         )));
                     }
 
-                    let header_json =
-                        base64::decode_config(parts[0], crate::core::base64_url_safe_no_pad())
-                            .map_err(|err| {
-                                DE::custom(format!("Invalid base64url header encoding: {:?}", err))
-                            })?;
+                    let header_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(parts[0])
+                        .map_err(|err| {
+                            DE::custom(format!("Invalid base64url header encoding: {:?}", err))
+                        })?;
                     header = serde_json::from_slice(&header_json).map_err(|err| {
                         DE::custom(format!("Failed to parse header JSON: {:?}", err))
                     })?;
 
-                    let raw_payload =
-                        base64::decode_config(parts[1], crate::core::base64_url_safe_no_pad())
-                            .map_err(|err| {
-                                DE::custom(format!("Invalid base64url payload encoding: {:?}", err))
-                            })?;
+                    let raw_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(parts[1])
+                        .map_err(|err| {
+                            DE::custom(format!("Invalid base64url payload encoding: {:?}", err))
+                        })?;
                     payload = S::deserialize::<DE>(&raw_payload)?;
 
-                    signature =
-                        base64::decode_config(parts[2], crate::core::base64_url_safe_no_pad())
-                            .map_err(|err| {
-                                DE::custom(format!(
-                                    "Invalid base64url signature encoding: {:?}",
-                                    err
-                                ))
-                            })?;
+                    signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(parts[2])
+                        .map_err(|err| {
+                            DE::custom(format!(
+                                "Invalid base64url signature encoding: {:?}",
+                                err
+                            ))
+                        })?;
 
                     signing_input = format!("{}.{}", parts[0], parts[1]);
                 }
@@ -444,7 +447,9 @@ where
     where
         SE: Serializer,
     {
-        let signature_base64 = base64::encode_config(&self.signature, base64::URL_SAFE_NO_PAD);
+        use base64::Engine;
+        let signature_base64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.signature);
         serializer.serialize_str(&format!("{}.{}", self.signing_input, signature_base64))
     }
 }
@@ -453,9 +458,10 @@ where
 pub mod tests {
     use std::marker::PhantomData;
     use std::string::ToString;
+    use serde::{Deserialize, Serialize};
 
     use crate::core::{
-        CoreJsonWebKey, CoreJsonWebKeyType, CoreJweContentEncryptionAlgorithm,
+        CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm,
         CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey,
     };
     use crate::JsonWebKeyId;
@@ -520,30 +526,30 @@ pub mod tests {
     // This is the PEM form of the test private key from:
     // https://tools.ietf.org/html/rfc7520#section-3.4
     pub const TEST_RSA_PRIV_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----\n\
-         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\n\
+         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\n\
          -----END RSA PRIVATE KEY-----";
 
@@ -665,15 +671,18 @@ pub mod tests {
 
             assert_eq!(
                 jwt_access
-                    .payload(&CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, key)
+                    .payload::<crate::core::jwk::CoreJsonWebKeyUse, crate::core::jwk::CoreJsonWebKey>(
+                        &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, 
+                        key
+                    )
                     .expect("failed to validate payload")
                     .to_string(),
                 expected_payload
             );
         }
 
-        let key: CoreJsonWebKey =
-            serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
+        let key:
+            CoreJsonWebKey = serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
 
         let jwt: JsonWebToken<
             CoreJweContentEncryptionAlgorithm,
@@ -710,7 +719,11 @@ pub mod tests {
             _,
             _,
             JsonWebTokenStringPayloadSerde,
-        >::new(
+        >::new::<
+            crate::core::jwk::CoreJsonWebKeyUse,
+            crate::core::jwk::CoreJsonWebKey,
+            crate::core::jwk::CoreRsaPrivateSigningKey,
+        >(
             TEST_JWT_PAYLOAD.to_owned(),
             &signing_key,
             &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -738,16 +751,16 @@ pub mod tests {
             JsonWebTokenStringPayloadSerde,
         > = serde_json::from_value(serde_json::Value::String(corrupted_jwt_str))
             .expect("failed to deserialize");
-        let key: CoreJsonWebKey =
-            serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
+        let key:
+            CoreJsonWebKey = serde_json::from_str(TEST_RSA_PUB_KEY).expect("deserialization failed");
 
         // JsonWebTokenAccess for reference.
         (&jwt)
-            .payload(&CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, &key)
+            .payload::<CoreJsonWebKeyUse, CoreJsonWebKey>(&CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, &key)
             .expect_err("signature verification should have failed");
 
         // JsonWebTokenAccess for owned value.
-        jwt.payload(&CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, &key)
+        jwt.payload::<CoreJsonWebKeyUse, CoreJsonWebKey>(&CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, &key)
             .expect_err("signature verification should have failed");
     }
 
